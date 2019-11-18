@@ -28,13 +28,13 @@ import (
 
 var (
 	createInstallValuesLong = templates.LongDesc(`
-		Creates any missing cluster values into the cluster/values.yaml file 
+		Creates any missing cluster values into the cluster/values.yaml file
 `)
 
 	createInstallValuesExample = templates.Examples(`
 		# populate the cluster/values.yaml file
 		jx step create install values
-	
+
 			`)
 )
 
@@ -132,11 +132,7 @@ func (o *StepCreateInstallValuesOptions) Run() error {
 		}
 	}
 
-	// if we're using GKE and folks have provided a domain, i.e. we're  not using the Jenkins X default nip.io
-	// then let's enable external dns automatically.
-	if requirements.Ingress.Domain != "" && !requirements.Ingress.IsAutoDNSDomain() && requirements.Cluster.Provider == cloud.GKE {
-		log.Logger().Info("using a custom domain and GKE so enabling external dns, you can also now enable TLS")
-		requirements.Ingress.ExternalDNS = true
+	if requirements.Ingress.ExternalDNS && requirements.Ingress.Domain != "" && !requirements.Ingress.IsAutoDNSDomain() && requirements.Cluster.Provider == cloud.GKE {
 		log.Logger().Infof("validating the external-dns secret in namespace %s\n", info(ns))
 
 		kubeClient, err := o.KubeClient()
