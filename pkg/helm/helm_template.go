@@ -432,7 +432,7 @@ func (h *HelmTemplate) kubectlApply(ns string, releaseName string, wait bool, cr
 				return err
 			}
 
-			log.Logger().Info("kubectl", strings.Join(args, " "))
+			log.Logger().Info("kubectl ", strings.Join(args, " "))
 			log.Logger().Info("==========")
 			log.Logger().Info(output)
 			log.Logger().Info("==========")
@@ -500,7 +500,7 @@ func (h *HelmTemplate) kubectlDeleteFile(ns string, file string) error {
 }
 
 func (h *HelmTemplate) deleteOldResources(ns string, releaseName string, versionText string, wait bool) error {
-	selector := LabelReleaseName + "=" + releaseName + "," + LabelReleaseChartVersion + "!=" + versionText
+	selector := LabelReleaseName + "=" + releaseName + "," + LabelReleaseChartVersion + "<" + versionText
 	return h.deleteResourcesAndClusterResourcesBySelector(ns, selector, wait, "older releases")
 }
 
@@ -535,15 +535,15 @@ func (h *HelmTemplate) deleteResourcesBySelector(ns string, kinds []string, sele
 		if err != nil {
 			errList = append(errList, err)
 		} else {
-			log.Logger().Info("kubectl", strings.Join(args, " "))
+			log.Logger().Info("kubectl ", strings.Join(args, " "))
 			log.Logger().Info("==========")
 			log.Logger().Info(output)
 			log.Logger().Info("==========")
 
-			output = strings.TrimSpace(output)
-			if output != "No resources found" {
-				log.Logger().Info(output)
-			}
+			// output = strings.TrimSpace(output)
+			// if output != "No resources found" {
+			// 	log.Logger().Info(output)
+			// }
 		}
 	}
 	return errList
