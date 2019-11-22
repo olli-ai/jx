@@ -426,10 +426,16 @@ func (h *HelmTemplate) kubectlApply(ns string, releaseName string, wait bool, cr
 			if !h.KubectlValidate {
 				args = append(args, "--validate=false")
 			}
-			err = h.runKubectl(args...)
+			output, err := h.runKubectlWithOutput(args...)
+			// err = h.runKubectl(args...)
 			if err != nil {
 				return err
 			}
+
+			log.Logger().Info("kubectl", args...)
+			log.Logger().Info("==========")
+			log.Logger().Info(output)
+			log.Logger().Info("==========")
 			log.Logger().Info("")
 		}
 		return err
@@ -529,6 +535,11 @@ func (h *HelmTemplate) deleteResourcesBySelector(ns string, kinds []string, sele
 		if err != nil {
 			errList = append(errList, err)
 		} else {
+			log.Logger().Info("kubectl", args...)
+			log.Logger().Info("==========")
+			log.Logger().Info(output)
+			log.Logger().Info("==========")
+
 			output = strings.TrimSpace(output)
 			if output != "No resources found" {
 				log.Logger().Info(output)
