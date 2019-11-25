@@ -67,6 +67,32 @@ func TestDetermineGitRef_GitURLNotInVersionStream(t *testing.T) {
 	assert.Equal(t, "master", gitRef, "determineGitRef")
 }
 
+func TestCloneDevEnvironment(t *testing.T) {
+
+	url := "https://github.com/jenkins-x/jenkins-x-boot-config"
+	o := TestBootOptions{}
+	o.setup(defaultBootRequirements)
+
+	cloned, dir, err := o.cloneDevEnvironment(url)
+	assert.Nil(t, err, "error should not be nil")
+
+	assert.True(t, cloned)
+	assert.Equal(t, "jenkins-x-boot-config", dir, "cloned dir is incorrect")
+}
+
+func TestCloneDevEnvironmentIncorrectParam(t *testing.T) {
+	t.Parallel()
+
+	o := TestBootOptions{}
+	o.setup(defaultBootRequirements)
+	url := "not-a-url"
+
+	cloned, dir, err := o.cloneDevEnvironment(url)
+	assert.NotNil(t, err, "error should not be nil")
+	assert.False(t, cloned)
+	assert.Empty(t, dir)
+}
+
 func (o *TestBootOptions) createTmpRequirements(t *testing.T) string {
 	from, err := os.Open(o.RequirementsFile)
 	require.NoError(t, err, "unable to open test jx-requirements")

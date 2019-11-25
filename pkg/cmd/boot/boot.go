@@ -47,6 +47,8 @@ type BootOptions struct {
 
 	// RequirementsFile provided by the user to override the default requirements file from repository
 	RequirementsFile string
+
+	AttemptRestore bool
 }
 
 var (
@@ -98,6 +100,7 @@ func NewCmdBoot(commonOpts *opts.CommonOptions) *cobra.Command {
 	cmd.Flags().StringVarP(&options.EndStep, "end-step", "e", "", "the step in the pipeline to end at")
 	cmd.Flags().StringVarP(&options.HelmLogLevel, "helm-log", "v", "", "sets the helm logging level from 0 to 9. Passed into the helm CLI via the '-v' argument. Useful to diagnose helm related issues")
 	cmd.Flags().StringVarP(&options.RequirementsFile, "requirements", "r", "", "requirements file which will overwrite the default requirements file")
+	cmd.Flags().BoolVarP(&options.AttemptRestore, "attempt-restore", "a", false, "attempt to boot from an existing dev environment repository")
 
 	return cmd
 }
@@ -112,6 +115,13 @@ func (o *BootOptions) Run() error {
 	}
 
 	o.overrideSteps()
+
+	if o.AttemptRestore {
+		err := o.restoreFromDevEnvRepo()
+		if err != nil {
+			return err
+		}
+	}
 
 	projectConfig, pipelineFile, err := config.LoadProjectConfig(o.Dir)
 	if err != nil {
@@ -342,6 +352,69 @@ func (o *BootOptions) Run() error {
 	no.CommonOptions = o.CommonOptions
 	no.Args = []string{requirements.Cluster.Namespace}
 	return no.Run()
+}
+
+func (o *BootOptions) restoreFromDevEnvRepo() error {
+	url := o.determineDevEnvironmentUrl()
+	if url != "" {
+		cloned, dir, err := o.cloneDevEnvironment(url)
+		if err != nil {
+			return err
+		}
+		if cloned {
+			err = os.Chdir(dir)
+			if err != nil {
+				return errors.Wrapf(err, "failed to change into new directory: %s", dir)
+			}
+		} else {
+			log.Logger().Infof("failed to clone dev environment booting from %s", o.GitURL)
+		}
+	} else {
+		log.Logger().Infof("cannot determine dev environment url booting from %s", o.GitURL)
+	}
+	return nil
+}
+
+func (o *BootOptions) determineDevEnvironmentUrl() string {
+	gitProvider := os.Getenv("JX_VALUE_GITPROVIDER")
+	gitOwner := os.Getenv(config.RequirementEnvGitOwner)
+	clusterName := os.Getenv(config.RequirementClusterName)
+	if gitProvider != "" && gitOwner != "" && clusterName != "" {
+		repo := fmt.Sprintf("environment-%s-dev", clusterName)
+		repoName := o.Git().RepoName(gitOwner, repo)
+		url := fmt.Sprintf("https://%s.com/%s", gitProvider, repoName)
+		log.Logger().Infof("dev environment url is %s", url)
+		return url
+	}
+	return ""
+}
+
+func (o *BootOptions) cloneDevEnvironment(gitURL string) (bool, string, error) {
+	log.Logger().Infof("dev environment url specified %t ", o.AttemptRestore)
+	gitInfo, err := gits.ParseGitURL(gitURL)
+	if err != nil {
+		return false, "", errors.Wrapf(err, "failed to parse git URL %s", gitURL)
+	}
+
+	repo := gitInfo.Name
+	cloneDir := filepath.Join(o.Dir, repo)
+
+	err = os.MkdirAll(cloneDir, util.DefaultWritePermissions)
+	if err != nil {
+		return false, "", errors.Wrapf(err, "failed to create directory: %s", cloneDir)
+	}
+
+	err = o.Git().Clone(gitURL, cloneDir)
+	if err != nil {
+		log.Logger().Infof("failed to clone git URL %s to directory: %s", gitURL, cloneDir)
+		rmErr := os.RemoveAll(cloneDir)
+		if rmErr != nil {
+			log.Logger().Warnf("Unable to remove dev env directory")
+		}
+		return false, "", nil
+	}
+
+	return true, cloneDir, nil
 }
 
 func (o *BootOptions) updateBootCloneIfOutOfDate(gitRef string) error {

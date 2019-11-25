@@ -45,8 +45,7 @@ var (
 )
 
 const (
-	defaultUpgradeVersionStreamRef = "master"
-	builderImage                   = "gcr.io/jenkinsxio/builder-go"
+	builderImage = "gcr.io/jenkinsxio/builder-go"
 )
 
 // NewCmdUpgradeBoot creates the command
@@ -67,7 +66,7 @@ func NewCmdUpgradeBoot(commonOpts *opts.CommonOptions) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVarP(&options.Dir, "dir", "d", "", "the directory to look for the Jenkins X Pipeline and requirements")
-	cmd.Flags().StringVarP(&options.UpgradeVersionStreamRef, "upgrade-version-stream-ref", "", defaultUpgradeVersionStreamRef, "a version stream ref to use to upgrade to")
+	cmd.Flags().StringVarP(&options.UpgradeVersionStreamRef, "upgrade-version-stream-ref", "", config.DefaultVersionsRef, "a version stream ref to use to upgrade to")
 
 	return cmd
 }
@@ -487,6 +486,9 @@ func (o *UpgradeBootOptions) pipelineUserAuth() (*auth.AuthServer, *auth.UserAut
 		return nil, nil, errors.Wrap(err, "failed to create pipeline user git auth config service")
 	}
 	server, userAuth := authConfigSvc.Config().GetPipelineAuth()
+	if userAuth == nil {
+		return nil, nil, fmt.Errorf("pipeline user auth could not be found in current namespace")
+	}
 	return server, userAuth, nil
 }
 
