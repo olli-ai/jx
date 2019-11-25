@@ -529,7 +529,7 @@ func (h *HelmTemplate) deleteResourcesBySelector(ns string, kinds []string, sele
 		if err != nil {
 			errList = append(errList, err)
 		} else {
-			// output = strings.TrimSpace(output)
+			output = strings.TrimSpace(output)
 			// if output != "No resources found" {
 			// 	log.Logger().Info(output)
 			// }
@@ -1006,6 +1006,16 @@ func setYamlValue(mapSlice *yaml.MapSlice, value string, keys ...string) error {
 }
 
 func (h *HelmTemplate) runKubectl(args ...string) error {
+	// h.Runner.SetDir(h.CWD)
+	// h.Runner.SetName(h.Binary)
+	// h.Runner.SetArgs(args)
+	// output, err := h.Runner.RunWithoutRetry()
+	// log.Logger().Debugf(output)
+	_, err := h.runKubectlWithOutput(args...)
+	return err
+}
+
+func (h *HelmTemplate) runKubectlWithOutput(args ...string) (string, error) {
 	h.Runner.SetDir(h.CWD)
 	h.Runner.SetName(h.Binary)
 	h.Runner.SetArgs(args)
@@ -1013,22 +1023,14 @@ func (h *HelmTemplate) runKubectl(args ...string) error {
 	// log.Logger().Debugf(output)
 	log.Logger().Info("kubectl ", strings.Join(args, " "))
 	log.Logger().Info("==========")
-	if output != nil {
+	if output != "" {
 		log.Logger().Info(output)
 	}
 	if err != nil {
 		log.Logger().Info(err)
 	}
 	log.Logger().Info("==========")
-	return err
-}
-
-func (h *HelmTemplate) runKubectlWithOutput(args ...string) (string, error) {
-	// h.Runner.SetDir(h.CWD)
-	// h.Runner.SetName(h.Binary)
-	// h.Runner.SetArgs(args)
-	// return h.Runner.RunWithoutRetry()
-	return h.runKubectl(args...)
+	return output, err
 }
 
 // getChartNameAndVersion returns the chart name and version for the current chart folder
@@ -1073,6 +1075,11 @@ func (h *HelmTemplate) getChart(chartDir string, version string) (*chart.Metadat
 }
 
 func (h *HelmTemplate) runHooks(hooks []*HelmHook, hookPhase string, ns string, chart string, releaseName string, wait bool, create bool, force bool) error {
+	sHooks := []string{}
+	for _, hook := range hooks {
+		sHooks = append(sHooks, hook.Name)
+	}
+	log.Logger().Info("runHooks ([", strings.Join(sHooks, ", "), "], ", hookPhase, ")")
 	matchingHooks := MatchingHooks(hooks, hookPhase, "")
 	for _, hook := range matchingHooks {
 		err := h.kubectlApplyFile(ns, hookPhase, wait, create, force, hook.File)
