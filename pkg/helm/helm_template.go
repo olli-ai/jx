@@ -426,16 +426,10 @@ func (h *HelmTemplate) kubectlApply(ns string, releaseName string, wait bool, cr
 			if !h.KubectlValidate {
 				args = append(args, "--validate=false")
 			}
-			output, err := h.runKubectlWithOutput(args...)
-			// err = h.runKubectl(args...)
+			err = h.runKubectl(args...)
 			if err != nil {
 				return err
 			}
-
-			log.Logger().Info("kubectl ", strings.Join(args, " "))
-			log.Logger().Info("==========")
-			log.Logger().Info(output)
-			log.Logger().Info("==========")
 			log.Logger().Info("")
 		}
 		return err
@@ -500,7 +494,7 @@ func (h *HelmTemplate) kubectlDeleteFile(ns string, file string) error {
 }
 
 func (h *HelmTemplate) deleteOldResources(ns string, releaseName string, versionText string, wait bool) error {
-	selector := LabelReleaseName + "=" + releaseName + "," + LabelReleaseChartVersion + "<" + versionText
+	selector := LabelReleaseName + "=" + releaseName + "," + LabelReleaseChartVersion + "!=" + versionText
 	return h.deleteResourcesAndClusterResourcesBySelector(ns, selector, wait, "older releases")
 }
 
@@ -535,11 +529,6 @@ func (h *HelmTemplate) deleteResourcesBySelector(ns string, kinds []string, sele
 		if err != nil {
 			errList = append(errList, err)
 		} else {
-			log.Logger().Info("kubectl ", strings.Join(args, " "))
-			log.Logger().Info("==========")
-			log.Logger().Info(output)
-			log.Logger().Info("==========")
-
 			// output = strings.TrimSpace(output)
 			// if output != "No resources found" {
 			// 	log.Logger().Info(output)
@@ -1021,15 +1010,25 @@ func (h *HelmTemplate) runKubectl(args ...string) error {
 	h.Runner.SetName(h.Binary)
 	h.Runner.SetArgs(args)
 	output, err := h.Runner.RunWithoutRetry()
-	log.Logger().Debugf(output)
+	// log.Logger().Debugf(output)
+	log.Logger().Info("kubectl ", strings.Join(args, " "))
+	log.Logger().Info("==========")
+	if output != nil {
+		log.Logger().Info(output)
+	}
+	if err != nil {
+		log.Logger().Info(err)
+	}
+	log.Logger().Info("==========")
 	return err
 }
 
 func (h *HelmTemplate) runKubectlWithOutput(args ...string) (string, error) {
-	h.Runner.SetDir(h.CWD)
-	h.Runner.SetName(h.Binary)
-	h.Runner.SetArgs(args)
-	return h.Runner.RunWithoutRetry()
+	// h.Runner.SetDir(h.CWD)
+	// h.Runner.SetName(h.Binary)
+	// h.Runner.SetArgs(args)
+	// return h.Runner.RunWithoutRetry()
+	return h.runKubectl(args...)
 }
 
 // getChartNameAndVersion returns the chart name and version for the current chart folder
