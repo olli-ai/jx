@@ -495,6 +495,9 @@ func (h *HelmTemplate) kubectlDeleteFile(ns string, file string) error {
 
 func (h *HelmTemplate) deleteOldResources(ns string, releaseName string, versionText string, wait bool) error {
 	selector := LabelReleaseName + "=" + releaseName + "," + LabelReleaseChartVersion + "<" + versionText
+	if strings.ContainsAny(versionText, "-") {
+		selector = LabelReleaseName + "=" + releaseName + "," + LabelReleaseChartVersion + "!=" + versionText
+	}
 	return h.deleteResourcesAndClusterResourcesBySelector(ns, selector, wait, "older releases")
 }
 
