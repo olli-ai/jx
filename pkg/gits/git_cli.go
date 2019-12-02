@@ -32,11 +32,15 @@ var (
 )
 
 // GitCLI implements common git actions based on git CLI
-type GitCLI struct{}
+type GitCLI struct {
+	Env map[string]string
+}
 
 // NewGitCLI creates a new GitCLI instance
 func NewGitCLI() *GitCLI {
-	return &GitCLI{}
+	return &GitCLI{
+		Env: map[string]string{},
+	}
 }
 
 // FindGitConfigDir tries to find the `.git` directory either in the current directory or in parent directories
@@ -452,6 +456,16 @@ func (g *GitCLI) HasChanges(dir string) (bool, error) {
 	return len(text) > 0, nil
 }
 
+// HasFileChanged indicates if there are any changes to a file in the repository from the given directory
+func (g *GitCLI) HasFileChanged(dir string, fileName string) (bool, error) {
+	text, err := g.gitCmdWithOutput(dir, "status", "-s", fileName)
+	if err != nil {
+		return false, err
+	}
+	text = strings.TrimSpace(text)
+	return len(text) > 0, nil
+}
+
 // CommiIfChanges does a commit if there are any changes in the repository at the given directory
 func (g *GitCLI) CommitIfChanges(dir string, message string) error {
 	changed, err := g.HasChanges(dir)
@@ -520,8 +534,13 @@ func (g *GitCLI) AddCommit(dir string, msg string) error {
 
 // AddCommitFiles perform an add and commit selected files from the repository at the given directory with the given messages
 func (g *GitCLI) AddCommitFiles(dir string, msg string, files []string) error {
-	fileString := strings.Trim(fmt.Sprintf("%v", files), "[]")
-	return g.gitCmd(dir, "commit", "-m", msg, "--", fileString)
+	for _, file := range files {
+		err := g.Add(dir, file)
+		if err != nil {
+			return err
+		}
+	}
+	return g.gitCmd(dir, "commit", "-m", msg)
 }
 
 func (g *GitCLI) gitCmd(dir string, args ...string) error {
@@ -529,6 +548,7 @@ func (g *GitCLI) gitCmd(dir string, args ...string) error {
 		Dir:  dir,
 		Name: "git",
 		Args: args,
+		Env:  g.Env,
 	}
 	// Ensure that error output is in English so parsing work
 	cmd.Env = map[string]string{"LC_ALL": "C"}

@@ -237,7 +237,7 @@ func (options *ImportOptions) Run() error {
 
 	var userAuth *auth.UserAuth
 	if options.GitProvider == nil {
-		authConfigSvc, err := options.CreateGitAuthConfigServiceDryRun(options.DryRun)
+		authConfigSvc, err := options.GitLocalAuthConfigService()
 		if err != nil {
 			return err
 		}
@@ -637,7 +637,7 @@ func (options *ImportOptions) GetOrganisation() string {
 
 // CreateNewRemoteRepository creates a new remote repository
 func (options *ImportOptions) CreateNewRemoteRepository() error {
-	authConfigSvc, err := options.CreateGitAuthConfigService()
+	authConfigSvc, err := options.GitLocalAuthConfigService()
 	if err != nil {
 		return err
 	}
@@ -917,7 +917,7 @@ func (options *ImportOptions) doImport() error {
 		gitProvider = p
 	}
 
-	authConfigSvc, err := options.CreateGitAuthConfigService()
+	authConfigSvc, err := options.GitLocalAuthConfigService()
 	if err != nil {
 		return err
 	}
@@ -949,8 +949,14 @@ func (options *ImportOptions) doImport() error {
 	if err != nil {
 		return err
 	}
+
+	githubAppMode, err := options.IsGitHubAppMode()
+	if err != nil {
+		return err
+	}
+
 	if isProw {
-		if !options.DisableWebhooks {
+		if !options.DisableWebhooks && !githubAppMode {
 			// register the webhook
 			err = options.CreateWebhookProw(gitURL, gitProvider)
 			if err != nil {
@@ -978,6 +984,11 @@ func (options *ImportOptions) addProwConfig(gitURL string, gitKind string) error
 		return err
 	}
 	_, currentNamespace, err := options.KubeClientAndNamespace()
+	if err != nil {
+		return err
+	}
+
+	gha, err := options.IsGitHubAppMode()
 	if err != nil {
 		return err
 	}
@@ -1019,7 +1030,7 @@ func (options *ImportOptions) addProwConfig(gitURL string, gitKind string) error
 		}
 
 		devGitURL := devEnv.Spec.Source.URL
-		if devGitURL != "" {
+		if devGitURL != "" && !gha {
 			// lets generate a PR
 			base := devEnv.Spec.Source.Ref
 			if base == "" {
@@ -1061,14 +1072,17 @@ func (options *ImportOptions) addProwConfig(gitURL string, gitKind string) error
 		}
 	}
 
-	startBuildOptions := start.StartPipelineOptions{
-		CommonOptions: options.CommonOptions,
+	if !gha {
+		startBuildOptions := start.StartPipelineOptions{
+			CommonOptions: options.CommonOptions,
+		}
+		startBuildOptions.Args = []string{fmt.Sprintf("%s/%s/%s", gitInfo.Organisation, gitInfo.Name, opts.MasterBranch)}
+		err = startBuildOptions.Run()
+		if err != nil {
+			return fmt.Errorf("failed to start pipeline build")
+		}
 	}
-	startBuildOptions.Args = []string{fmt.Sprintf("%s/%s/%s", gitInfo.Organisation, gitInfo.Name, opts.MasterBranch)}
-	err = startBuildOptions.Run()
-	if err != nil {
-		return fmt.Errorf("failed to start pipeline build")
-	}
+
 	options.LogImportedProject(false, gitInfo)
 
 	return nil
@@ -1580,7 +1594,7 @@ func (options *ImportOptions) GetGitRepositoryDetails() (*gits.CreateRepoData, e
 	if err != nil {
 		return nil, err
 	}
-	authConfigSvc, err := options.CreateGitAuthConfigService()
+	authConfigSvc, err := options.GitLocalAuthConfigService()
 	if err != nil {
 		return nil, err
 	}

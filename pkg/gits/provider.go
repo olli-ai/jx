@@ -10,6 +10,7 @@ import (
 
 	"github.com/jenkins-x/jx/pkg/auth"
 	"github.com/jenkins-x/jx/pkg/util"
+	"github.com/pkg/errors"
 	"gopkg.in/AlecAivazis/survey.v1"
 )
 
@@ -508,19 +509,26 @@ func CreateProviderForURL(inCluster bool, authConfigSvc auth.ConfigService, gitK
 		return CreateProvider(server, userAuth, git)
 	}
 
-	kind := server.Kind
-	if kind == "" {
-		kind = "GIT"
+	if ghOwner == "" {
+		kind := server.Kind
+		if kind == "" {
+			kind = "GIT"
+		}
+		userAuthVar := auth.CreateAuthUserFromEnvironment(strings.ToUpper(kind))
+		if !userAuthVar.IsInvalid() {
+			return CreateProvider(server, &userAuthVar, git)
+		}
+
+		var err error
+		userAuth, err = createUserForServer(batchMode, &auth.UserAuth{}, authConfigSvc, server, git, handles)
+		if err != nil {
+			return nil, errors.Wrapf(err, "creating user for server %q", server.URL)
+		}
 	}
-	userAuthVar := auth.CreateAuthUserFromEnvironment(strings.ToUpper(kind))
-	if !userAuthVar.IsInvalid() {
-		return CreateProvider(server, &userAuthVar, git)
+	if userAuth != nil && !userAuth.IsInvalid() {
+		return CreateProvider(server, userAuth, git)
 	}
-	userAuth, err := createUserForServer(batchMode, &userAuthVar, authConfigSvc, server, git, handles)
-	if err != nil {
-		return nil, err
-	}
-	return CreateProvider(server, userAuth, git)
+	return nil, fmt.Errorf("no valid git user found for kind %s host %s %s", gitKind, hostURL, ghOwner)
 }
 
 func createUserForServer(batchMode bool, userAuth *auth.UserAuth, authConfigSvc auth.ConfigService, server *auth.AuthServer,
@@ -536,8 +544,6 @@ func createUserForServer(batchMode bool, userAuth *auth.UserAuth, authConfigSvc 
 	if err != nil {
 		return userAuth, err
 	}
-
-	// TODO lets verify the auth works
 
 	err = authConfigSvc.SaveUserAuth(server.URL, userAuth)
 	if err != nil {

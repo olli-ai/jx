@@ -11,14 +11,17 @@ import (
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 )
 
-func secret(name string, serverKind string, serviceKind string, createLabels bool,
+func secret(name string, kind string, serviceKind string, githubAppOwner string, createLabels bool,
 	serviceName string, url string, username string, password string) *corev1.Secret {
 	labels := map[string]string{}
-	if serverKind != "" || createLabels {
-		labels[labelKind] = serverKind
+	if kind != "" || createLabels {
+		labels[labelKind] = kind
 	}
 	if serviceKind != "" || createLabels {
 		labels[labelServiceKind] = serviceKind
+	}
+	if githubAppOwner != "" {
+		labels[labelGithubAppOwner] = githubAppOwner
 	}
 	annotations := map[string]string{
 		annotationName: serviceName,
@@ -48,16 +51,18 @@ func TestLoadConfig(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct {
-		name         string
-		namespace    string
-		serverKind   string
-		serviceKind  string
-		createLabels bool
-		url          string
-		username     string
-		password     string
-		want         AuthConfig
-		err          bool
+		name           string
+		namespace      string
+		serverKind     string
+		serviceKind    string
+		gitHubAppOwner string
+		createLabels   bool
+		url            string
+		username       string
+		password       string
+		want           AuthConfig
+		err            bool
+		secrets        []*corev1.Secret
 	}{
 		"load config from k8s secret": {
 			name:         "GitHub",
@@ -83,9 +88,88 @@ func TestLoadConfig(t *testing.T) {
 						CurrentUser: "test",
 					},
 				},
-				CurrentServer: "https://github.com",
+				CurrentServer:    "https://github.com",
+				PipeLineServer:   "https://github.com",
+				PipeLineUsername: "test",
+				DefaultUsername:  "test",
 			},
 			err: false,
+		},
+		"load config from k8s secret with GitHub app owner": {
+			name:           "GitHub",
+			namespace:      "test",
+			serverKind:     "git",
+			serviceKind:    "github",
+			gitHubAppOwner: "test-app-owner",
+			createLabels:   true,
+			url:            "https://github.com",
+			username:       "test",
+			password:       "test",
+			want: AuthConfig{
+				Servers: []*AuthServer{
+					{
+						URL: "https://github.com",
+						Users: []*UserAuth{
+							{
+								Username:       "test",
+								ApiToken:       "test",
+								GithubAppOwner: "test-app-owner",
+							},
+						},
+						Name: "GitHub",
+						Kind: "github",
+					},
+				},
+				CurrentServer:  "https://github.com",
+				PipeLineServer: "https://github.com",
+			},
+			err: false,
+		},
+		"load config from multiple GitHub App secrets for the same server": {
+			name:           "GitHub",
+			namespace:      "test",
+			serverKind:     "git",
+			serviceKind:    "github",
+			gitHubAppOwner: "test-app-owner",
+			createLabels:   true,
+			url:            "https://github.com",
+			username:       "github-app[bot]",
+			password:       "expected-bot-token",
+			want: AuthConfig{
+				Servers: []*AuthServer{
+					{
+						URL: "https://github.com",
+						Users: []*UserAuth{
+							{
+								Username:       "github-app[bot]",
+								ApiToken:       "password-1",
+								GithubAppOwner: "app-owner-1",
+							},
+							{
+								Username:       "github-app[bot]",
+								ApiToken:       "password-2",
+								GithubAppOwner: "app-owner-2",
+							},
+							{
+								Username:       "github-app[bot]",
+								ApiToken:       "expected-bot-token",
+								GithubAppOwner: "test-app-owner",
+							},
+						},
+						Name: "GitHub",
+						Kind: "github",
+					},
+				},
+				CurrentServer:  "https://github.com",
+				PipeLineServer: "https://github.com",
+			},
+			err: false,
+			secrets: []*corev1.Secret{
+				secret("gha-1", "git", "github", "app-owner-1", true,
+					"GitHub", "https://github.com", "github-app[bot]", "password-1"),
+				secret("gha-2", "git", "github", "app-owner-2", true,
+					"GitHub", "https://github.com", "github-app[bot]", "password-2"),
+			},
 		},
 		"load config from k8s secret without service kind": {
 			name:         "GitHub",
@@ -111,7 +195,10 @@ func TestLoadConfig(t *testing.T) {
 						CurrentUser: "test",
 					},
 				},
-				CurrentServer: "https://github.com",
+				CurrentServer:    "https://github.com",
+				PipeLineServer:   "https://github.com",
+				PipeLineUsername: "test",
+				DefaultUsername:  "test",
 			},
 			err: false,
 		},
@@ -139,7 +226,10 @@ func TestLoadConfig(t *testing.T) {
 						CurrentUser: "test",
 					},
 				},
-				CurrentServer: "https://github.com",
+				CurrentServer:    "https://github.com",
+				PipeLineServer:   "https://github.com",
+				PipeLineUsername: "test",
+				DefaultUsername:  "test",
 			},
 			err: false,
 		},
@@ -167,7 +257,10 @@ func TestLoadConfig(t *testing.T) {
 						CurrentUser: "test",
 					},
 				},
-				CurrentServer: "https://github.com",
+				CurrentServer:    "https://github.com",
+				PipeLineServer:   "https://github.com",
+				PipeLineUsername: "test",
+				DefaultUsername:  "test",
 			},
 			err: false,
 		},
@@ -195,7 +288,10 @@ func TestLoadConfig(t *testing.T) {
 						CurrentUser: "test",
 					},
 				},
-				CurrentServer: "https://github.com",
+				CurrentServer:    "https://github.com",
+				PipeLineServer:   "https://github.com",
+				PipeLineUsername: "test",
+				DefaultUsername:  "test",
 			},
 			err: false,
 		},
@@ -277,10 +373,13 @@ func TestLoadConfig(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			client := k8sfake.NewSimpleClientset()
 			const secretName = "config-test"
-			secret := secret(secretName, tc.serverKind, tc.serviceKind, tc.createLabels,
-				tc.name, tc.url, tc.username, tc.password)
-			_, err := client.CoreV1().Secrets(tc.namespace).Create(secret)
-			assert.NoError(t, err, "should create secret without error")
+			secrets := append(tc.secrets, secret(secretName, tc.serverKind, tc.serviceKind, tc.gitHubAppOwner, tc.createLabels,
+				tc.name, tc.url, tc.username, tc.password))
+
+			for _, secret := range secrets {
+				_, err := client.CoreV1().Secrets(tc.namespace).Create(secret)
+				assert.NoError(t, err, "should create secret without error")
+			}
 
 			svc := NewKubeAuthConfigService(client, tc.namespace, tc.serverKind, tc.serviceKind)
 			config, err := svc.LoadConfig()
@@ -347,6 +446,57 @@ func TestSaveConfig(t *testing.T) {
 							labelCreatedBy:       valueCreatedByJX,
 							labelKind:            "git",
 							labelServiceKind:     "github",
+						},
+						Annotations: map[string]string{
+							annotationCredentialsDescription: fmt.Sprintf("Configuration and credentials for server https://github.com"),
+							annotationURL:                    "https://github.com",
+							annotationName:                   "GitHub",
+						},
+					},
+					Data: map[string][]byte{
+						"username": []byte("test1"),
+						"password": []byte("test1"),
+					},
+				},
+			},
+		},
+		"save config into kubernetes secret with GitHub app owner": {
+			namespace:  "test",
+			serverKind: "git",
+			config: &AuthConfig{
+				Servers: []*AuthServer{
+					{
+						URL: "https://github.com",
+						Users: []*UserAuth{
+							{
+								Username:       "test1",
+								ApiToken:       "test1",
+								GithubAppOwner: "test1-github-app-owner",
+							},
+							{
+								Username: "test2",
+								ApiToken: "test2",
+							},
+						},
+						Name:        "GitHub",
+						Kind:        "github",
+						CurrentUser: "test1",
+					},
+				},
+				CurrentServer: "https://github.com",
+			},
+			err: false,
+			want: []*corev1.Secret{
+				{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "jx-pipeline-git-github-github",
+						Namespace: "test",
+						Labels: map[string]string{
+							labelCredentialsType: valueCredentialTypeUsernamePassword,
+							labelCreatedBy:       valueCreatedByJX,
+							labelKind:            "git",
+							labelServiceKind:     "github",
+							labelGithubAppOwner:  "test1-github-app-owner",
 						},
 						Annotations: map[string]string{
 							annotationCredentialsDescription: fmt.Sprintf("Configuration and credentials for server https://github.com"),

@@ -403,7 +403,7 @@ func (o *StepVerifyPreInstallOptions) configureVelero(requirements *config.Requi
 
 	serviceAccountName := requirements.Velero.ServiceAccount
 	if serviceAccountName == "" {
-		serviceAccountName = naming.ToValidNameTruncated(fmt.Sprintf("%s-velero", clusterName), 30)
+		serviceAccountName = naming.ToValidNameTruncated(fmt.Sprintf("%s-vo", clusterName), 30)
 		requirements.Velero.ServiceAccount = serviceAccountName
 	}
 	log.Logger().Infof("Configuring Velero service account %s for project %s", util.ColorInfo(serviceAccountName), util.ColorInfo(projectID))
@@ -442,6 +442,7 @@ func (o *StepVerifyPreInstallOptions) VerifyInstallConfig(kubeClient kubernetes.
 			modifyMapIfNotBlank(configMap.Data, kube.ClusterName, requirements.Cluster.ClusterName)
 			modifyMapIfNotBlank(configMap.Data, secrets.SecretsLocationKey, secretsLocation)
 			modifyMapIfNotBlank(configMap.Data, kube.Region, requirements.Cluster.Region)
+			modifyMapIfNotBlank(configMap.Data, kube.Zone, requirements.Cluster.Zone)
 			return nil
 		}, nil)
 	if err != nil {
