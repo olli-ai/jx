@@ -297,6 +297,7 @@ func (p *GitHubProvider) CreateRepository(owner string, name string, private boo
 	}
 
 	org := owner
+
 	if org == p.Username {
 		log.Logger().Debugf("repository owner for %s is the authenticated user %s, setting org to the empty string '%s'", name, p.Username, org)
 		org = ""
@@ -1372,7 +1373,7 @@ func (p *GitHubProvider) AcceptInvitation(ID int64) (*github.Response, error) {
 // ShouldForkForPullRequest returns true if we should create a personal fork of this repository
 // before creating a pull request
 func (p *GitHubProvider) ShouldForkForPullRequest(originalOwner string, repoName string, username string) bool {
-	if username == "jenkins-x[bot]" || originalOwner == username {
+	if strings.HasSuffix(username, "[bot]") || originalOwner == username {
 		return false
 	}
 

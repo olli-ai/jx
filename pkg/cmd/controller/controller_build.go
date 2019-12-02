@@ -45,10 +45,11 @@ import (
 type ControllerBuildOptions struct {
 	ControllerOptions
 
-	Namespace          string
-	InitGitCredentials bool
-	GitReporting       bool
-	TargetURLTemplate  string
+	Namespace           string
+	InitGitCredentials  bool
+	GitReporting        bool
+	TargetURLTemplate   string
+	FailIfNoGitProvider bool
 
 	EnvironmentCache *kube.EnvironmentNamespaceCache
 
@@ -123,6 +124,7 @@ func NewCmdControllerBuild(commonOpts *opts.CommonOptions) *cobra.Command {
 
 	cmd.Flags().StringVarP(&options.Namespace, "namespace", "n", "", "The namespace to watch or defaults to the current namespace")
 	cmd.Flags().BoolVarP(&options.InitGitCredentials, "git-credentials", "", false, "If enable then lets run the 'jx step git credentials' step to initialise git credentials")
+	cmd.Flags().BoolVarP(&options.FailIfNoGitProvider, "fail-on-git-provider-error", "", false, "If enable then lets terminate quickly if we cannot create a git provider")
 
 	// optional git reporting flags
 	cmd.Flags().StringVarP(&options.TargetURLTemplate, "target-url-template", "", "", "The Go template for generating the target URL of pipeline logs/views if git reporting is enabled")
@@ -372,7 +374,7 @@ func (o *ControllerBuildOptions) onPipelinePod(obj interface{}, kubeClient kuber
 						return nil
 					})
 					if err != nil {
-						log.Logger().Warnf("Failed to update PipelineActivities%s: %s", name, err)
+						log.Logger().Warnf("Failed to update PipelineActivities %s: %s", name, err)
 					}
 				}
 			} else {
@@ -419,14 +421,12 @@ func (o *ControllerBuildOptions) completeBuildSourceInfo(activity *v1.PipelineAc
 		return nil
 	}
 
-	secrets, err := o.LoadPipelineSecrets(kube.ValueKindGit, "github")
-	if err != nil {
-		return err
-	}
-
 	// get a git API client
-	provider, err := o.getGithubProvider(secrets, gitInfo)
+	provider, err := o.getGithubProvider(gitInfo)
 	if err != nil {
+		if o.FailIfNoGitProvider {
+			log.Logger().Fatalf("could not create git provider: %s", err.Error())
+		}
 		return err
 	}
 
@@ -468,7 +468,7 @@ func (o *ControllerBuildOptions) completeBuildSourceInfo(activity *v1.PipelineAc
 	return nil
 }
 
-func (o *ControllerBuildOptions) getGithubProvider(secrets *corev1.SecretList, gitInfo *gits.GitRepository) (gits.GitProvider, error) {
+func (o *ControllerBuildOptions) getGithubProvider(gitInfo *gits.GitRepository) (gits.GitProvider, error) {
 	// this internal provider is only used during tests
 	if o.gitHubProvider != nil {
 		return o.gitHubProvider, nil
@@ -486,6 +486,9 @@ func (o *ControllerBuildOptions) getGithubProvider(secrets *corev1.SecretList, g
 	}
 	if server == nil {
 		return nil, fmt.Errorf("no pipeline git auth could be found")
+	}
+	if userAuth == nil || userAuth.IsInvalid() {
+		return nil, fmt.Errorf("no pipeline git user auth could be found")
 	}
 	gitProvider, err := gits.CreateProvider(server, userAuth, nil)
 	if err != nil {
@@ -620,6 +623,7 @@ func (o *ControllerBuildOptions) updatePipelineActivity(kubeClient kubernetes.In
 
 		// lets ensure we overwrite any canonical jenkins build URL thats generated automatically
 		if spec.BuildLogsURL == "" || !strings.Contains(spec.BuildLogsURL, pod.Name) {
+			log.Logger().Debugf("Storing build logs for %s", activity.Name)
 			podInterface := kubeClient.CoreV1().Pods(ns)
 
 			envName := kube.LabelValueDevEnvironment
@@ -1054,6 +1058,7 @@ func toYamlString(resource interface{}) string {
 // generates the build log URL and returns the URL
 func (o *ControllerBuildOptions) generateBuildLogURL(podInterface typedcorev1.PodInterface, ns string, activity *v1.PipelineActivity, buildName string, pod *corev1.Pod, location v1.StorageLocation, settings *v1.TeamSettings, initGitCredentials bool, logMasker *kube.LogMasker) (string, error) {
 
+	log.Logger().Debugf("Collecting logs for %s to location %s", activity.Name, location.Description())
 	coll, err := collector.NewCollector(location, o.Git())
 	if err != nil {
 		return "", errors.Wrapf(err, "could not create Collector for pod %s in namespace %s with settings %#v", pod.Name, ns, settings)
@@ -1099,6 +1104,7 @@ func (o *ControllerBuildOptions) generateBuildLogURL(podInterface typedcorev1.Po
 		LogWriter:    logWriter,
 	}
 
+	log.Logger().Debugf("Capturing running build logs for %s", activity.Name)
 	err = tektonLogger.GetRunningBuildLogs(activity, buildName, false)
 	if err != nil {
 		return "", errors.Wrapf(err, "there was a problem getting logs for build %s", buildName)
@@ -1116,6 +1122,7 @@ func (o *ControllerBuildOptions) generateBuildLogURL(podInterface typedcorev1.Po
 		}
 	}
 
+	log.Logger().Debugf("Actually saving captured build logs for %s to %s", activity.Name, location.Description())
 	return coll.CollectData(w.data, fileName)
 }
 

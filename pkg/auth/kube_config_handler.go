@@ -20,6 +20,8 @@ const (
 	labelCreatedBy = "jenkins.io/created-by"
 	// labelCredentialsType the kind of jenkins credential for a secret
 	labelCredentialsType = "jenkins.io/credentials-type"
+	// labelGithubAppOwner the label to indicate the owner of a repository for github app token secrets
+	labelGithubAppOwner = "jenkins.io/githubapp-owner"
 	// valueCreatedByJX for resources created by the Jenkins X CLI
 	valueCreatedByJX = "jx"
 	// valueCredentialTypeUsernamePassword for user password credential secrets
@@ -45,7 +47,7 @@ func (k *KubeAuthConfigHandler) LoadConfig() (*AuthConfig, error) {
 		return nil, errors.Wrap(err, "retrieving config from k8s secrets")
 	}
 	if secrets == nil {
-		return nil, fmt.Errorf("no secrets found for server kind %q and service kind %q", k.serverKind, k.serviceKind)
+		return nil, fmt.Errorf("no secrets found for server kind %q and service kind %q", k.kind, k.serviceKind)
 	}
 	config := &AuthConfig{}
 	for _, secret := range secrets.Items {
@@ -60,20 +62,43 @@ func (k *KubeAuthConfigHandler) LoadConfig() (*AuthConfig, error) {
 				if err != nil {
 					continue
 				}
-				server := AuthServer{
-					URL:  url,
-					Name: name,
-					Kind: serviceKind,
-					Users: []*UserAuth{
-						&user,
-					},
-					CurrentUser: user.Username,
+				user.GithubAppOwner = labels[labelGithubAppOwner]
+				var server *AuthServer
+
+				// for github app mode lets share the same server and have multiple users
+				if user.GithubAppOwner != "" {
+					for _, s := range config.Servers {
+						if s.URL == url {
+							server = s
+							break
+						}
+					}
 				}
-				if config.Servers == nil {
-					config.Servers = []*AuthServer{}
+				if server != nil {
+					server.Users = append(server.Users, &user)
+				} else {
+					server = &AuthServer{
+						URL:  url,
+						Name: name,
+						Kind: serviceKind,
+						Users: []*UserAuth{
+							&user,
+						},
+					}
+					if user.GithubAppOwner == "" {
+						server.CurrentUser = user.Username
+					}
+					if config.Servers == nil {
+						config.Servers = []*AuthServer{}
+					}
+					config.Servers = append(config.Servers, server)
 				}
-				config.Servers = append(config.Servers, &server)
 				config.CurrentServer = server.URL
+				config.PipeLineServer = server.URL
+				if user.GithubAppOwner == "" {
+					config.PipeLineUsername = user.Username
+					config.DefaultUsername = user.Username
+				}
 			}
 		}
 	}
@@ -118,6 +143,12 @@ func (k *KubeAuthConfigHandler) SaveConfig(config *AuthConfig) error {
 		} else {
 			secret.Data[passwordKey] = []byte(user.Password)
 		}
+		if user.GithubAppOwner != "" {
+			labels := map[string]string{
+				labelGithubAppOwner: user.GithubAppOwner,
+			}
+			secret.Labels = util.MergeMaps(secret.Labels, labels)
+		}
 		if create {
 			if _, err := k.client.CoreV1().Secrets(k.namespace).Create(secret); err != nil {
 				return errors.Wrapf(err, "creating secret %q", name)
@@ -134,9 +165,9 @@ func (k *KubeAuthConfigHandler) SaveConfig(config *AuthConfig) error {
 // secretName builds the secret name
 func (k *KubeAuthConfigHandler) secretName(server *AuthServer) string {
 	secretName := secretPrefix
-	serverKind := strings.ToLower(k.serverKind)
-	if serverKind != "" {
-		secretName += "-" + serverKind
+	kind := strings.ToLower(k.kind)
+	if kind != "" {
+		secretName += "-" + kind
 	}
 	serviceKind := strings.ToLower(server.Kind)
 	if serviceKind != "" {
@@ -153,7 +184,7 @@ func (k *KubeAuthConfigHandler) labels(server *AuthServer) map[string]string {
 	return map[string]string{
 		labelCredentialsType: valueCredentialTypeUsernamePassword,
 		labelCreatedBy:       valueCreatedByJX,
-		labelKind:            k.serverKind,
+		labelKind:            k.kind,
 		labelServiceKind:     server.Kind,
 	}
 }
@@ -167,7 +198,7 @@ func (k *KubeAuthConfigHandler) annotations(server *AuthServer) map[string]strin
 }
 
 func (k *KubeAuthConfigHandler) secrets() (*corev1.SecretList, error) {
-	selector := labelKind + "=" + k.serverKind
+	selector := labelKind + "=" + k.kind
 	if k.serviceKind != "" {
 		selector = labelServiceKind + "=" + k.serviceKind
 	}
@@ -198,17 +229,17 @@ func (k *KubeAuthConfigHandler) userFromSecret(secret corev1.Secret) (UserAuth, 
 }
 
 // NewKubeAuthConfigHandler creates a handler which loads/stores the auth config from/into Kubernetes secrets
-func NewKubeAuthConfigHandler(client kubernetes.Interface, namespace string, serverKind string, serviceKind string) KubeAuthConfigHandler {
+func NewKubeAuthConfigHandler(client kubernetes.Interface, namespace string, kind string, serviceKind string) KubeAuthConfigHandler {
 	return KubeAuthConfigHandler{
 		client:      client,
 		namespace:   namespace,
-		serverKind:  serverKind,
+		kind:        kind,
 		serviceKind: serviceKind,
 	}
 }
 
 // NewKubeAuthConfigService creates a config services that loads/stores the auth config from a Kubernetes secret
-func NewKubeAuthConfigService(client kubernetes.Interface, namespace string, serverKind string, serviceKind string) ConfigService {
-	handler := NewKubeAuthConfigHandler(client, namespace, serverKind, serviceKind)
+func NewKubeAuthConfigService(client kubernetes.Interface, namespace string, kind string, serviceKind string) ConfigService {
+	handler := NewKubeAuthConfigHandler(client, namespace, kind, serviceKind)
 	return NewAuthConfigService(&handler)
 }
