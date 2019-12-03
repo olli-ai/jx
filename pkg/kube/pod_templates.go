@@ -1,8 +1,6 @@
 package kube
 
 import (
-	"strings"
-
 	"github.com/ghodss/yaml"
 	"github.com/jenkins-x/jx/pkg/log"
 	"github.com/jenkins-x/jx/pkg/util"
@@ -19,14 +17,14 @@ func LoadPodTemplates(kubeClient kubernetes.Interface, ns string) (map[string]*c
 	configMapInterface := kubeClient.CoreV1().ConfigMaps(ns)
 	cm, err := configMapInterface.Get(configMapName, metav1.GetOptions{})
 	if err == nil {
-		for k, v := range cm.Data {
+		for _, v := range cm.Data {
 			pod := &corev1.Pod{}
 			if v != "" {
 				err := yaml.Unmarshal([]byte(v), pod)
 				if err != nil {
 					return answer, err
 				}
-				answer[k] = pod
+				answer[pod.ObjectMeta.Name] = pod
 			}
 		}
 		return answer, nil
@@ -50,8 +48,7 @@ func LoadPodTemplates(kubeClient kubernetes.Interface, ns string) (map[string]*c
 				if err != nil {
 					return answer, err
 				}
-				name := strings.TrimPrefix(cm.Name, "jenkins-x-pod-template-")
-				answer[name] = pod
+				answer[pod.ObjectMeta.Name] = pod
 				found = true
 			}
 		}

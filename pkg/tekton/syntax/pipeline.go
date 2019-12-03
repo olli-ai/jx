@@ -446,6 +446,13 @@ func (a *Agent) GetImage() string {
 	return a.Container
 }
 
+func (a *Agent) GetName() string {
+	if a.Label != "" {
+		return a.Label
+	}
+	return a.GetImage()
+}
+
 // MangleToRfc1035Label - Task/Step names need to be RFC 1035/1123 compliant DNS labels, so we mangle
 // them to make them compliant. Results should match the following regex and be
 // no more than 63 characters long:

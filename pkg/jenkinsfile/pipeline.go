@@ -986,7 +986,7 @@ func (c *PipelineConfig) CreatePipelineForBuildPack(args CreatePipelineArguments
 	}
 
 	// If agent.container is specified, use that for default container configuration for step images.
-	containerName := c.Agent.GetImage()
+	containerName := c.Agent.GetName()
 	if containerName != "" {
 		if args.PodTemplates != nil && args.PodTemplates[containerName] != nil {
 			podTemplate := args.PodTemplates[containerName]
