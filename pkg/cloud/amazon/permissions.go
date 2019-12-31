@@ -9,6 +9,8 @@ import (
 	"strings"
 	"text/template"
 
+	session2 "github.com/jenkins-x/jx/pkg/cloud/amazon/session"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/cloudformation"
 	"github.com/google/uuid"
@@ -34,7 +36,7 @@ const (
 // EnableIRSASupportInCluster Associates IAM as an OIDC provider so it can sign requests and assume roles
 func EnableIRSASupportInCluster(requirements *config.RequirementsConfig) error {
 	log.Logger().Infof("Enabling IRSA for cluster %s associating the IAM Open ID Connect provider", util.ColorInfo(requirements.Cluster.ClusterName))
-	args := []string{"utils", "associate-iam-oidc-provider", "--name", requirements.Cluster.ClusterName, "--region", requirements.Cluster.Region, "--approve"}
+	args := []string{"utils", "associate-iam-oidc-provider", "--cluster", requirements.Cluster.ClusterName, "--region", requirements.Cluster.Region, "--approve"}
 	err := executeEksctlCommand(args)
 	if err != nil {
 		return errors.Wrap(err, "there was a porblem enabling IRSA in the cluster")
@@ -76,7 +78,7 @@ func CreateIRSAManagedServiceAccounts(requirements *config.RequirementsConfig, k
 // the returned map so it can be used as parameters for the Go Template irsa.tmpl.yaml
 func createPoliciesStack(requirements *config.RequirementsConfig, kubeProvidersDir string) (map[string]interface{}, error) {
 	eksKubeProviderDir := filepath.Join(kubeProvidersDir, cloud.EKS, ConfigTemplatesFolder)
-	session, err := NewAwsSession("", requirements.Cluster.Region)
+	session, err := session2.NewAwsSession("", requirements.Cluster.Region)
 	if err != nil {
 		return nil, errors.Wrap(err, "error creating a new AWS Session")
 	}

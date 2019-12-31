@@ -474,13 +474,8 @@ func (o *ControllerBuildOptions) getGithubProvider(gitInfo *gits.GitRepository) 
 		return o.gitHubProvider, nil
 	}
 
-	ghOwner, err := o.GetGitHubAppOwner(gitInfo)
-	if err != nil {
-		return nil, err
-	}
-
 	// production code always goes this way
-	server, userAuth, err := o.GetPipelineGitAuth(ghOwner)
+	server, userAuth, err := o.GetPipelineGitAuthForRepo(gitInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -1122,8 +1117,14 @@ func (o *ControllerBuildOptions) generateBuildLogURL(podInterface typedcorev1.Po
 		}
 	}
 
-	log.Logger().Debugf("Actually saving captured build logs for %s to %s", activity.Name, location.Description())
-	return coll.CollectData(w.data, fileName)
+	log.Logger().Infof("storing logs for activity %s into storage at %s", activity.Name, fileName)
+	answer, err := coll.CollectData(w.data, fileName)
+	if err != nil {
+		log.Logger().Errorf("failed to store logs for activity %s into storage at %s: %s", activity.Name, fileName, err.Error())
+		return answer, err
+	}
+	log.Logger().Infof("stored logs for activity %s into storage at %s", activity.Name, fileName)
+	return answer, nil
 }
 
 // ensurePipelineActivityHasLabels older versions of controller build did not add labels properly
