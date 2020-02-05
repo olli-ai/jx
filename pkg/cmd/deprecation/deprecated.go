@@ -11,19 +11,19 @@ import (
 // deprecatedCommands list of deprecated commands along with some more deprecation details
 var deprecatedCommands map[string]deprecationInfo = map[string]deprecationInfo{
 	"install": {
-		replacement: "boot",
-		date:        "Feb 1 2020",
+		replacement: "jx boot",
+		date:        "Jun 1 2020",
 		info: fmt.Sprintf("Please check %s for more details.",
 			util.ColorStatus("https://jenkins-x.io/docs/getting-started/setup/boot/")),
 	},
 	"init": {
-		replacement: "boot",
-		date:        "Feb 1 2020",
+		replacement: "jx boot",
+		date:        "Jun 1 2020",
 		info: fmt.Sprintf("Please check %s for more details.",
 			util.ColorStatus("https://jenkins-x.io/docs/getting-started/setup/boot/")),
 	},
 	"create terraform": {
-		replacement: "boot",
+		replacement: "jx boot",
 		date:        "Feb 1 2020",
 		info: fmt.Sprintf("Please check %s for more details.",
 			util.ColorStatus("https://jenkins-x.io/docs/getting-started/setup/boot/")),
@@ -53,45 +53,41 @@ var deprecatedCommands map[string]deprecationInfo = map[string]deprecationInfo{
 	"create post": {
 		date: "Feb 1 2020",
 	},
-	"create step": {
-		date: "Feb 1 2020",
-		info: fmt.Sprintf("This will be renamed to %s command.", util.ColorStatus("edit pipeline")),
-	},
 	"create archetype": {
-		replacement: "create quickstart",
+		replacement: "jx create project",
 		date:        "Feb 1 2020",
 		info: fmt.Sprintf("Please check %s for more details.",
 			util.ColorStatus("https://jenkins-x.io/docs/getting-started/first-project/create-quickstart/")),
 	},
 	"create micro": {
-		replacement: "create quickstart",
+		replacement: "jx create project",
 		date:        "Feb 1 2020",
 		info: fmt.Sprintf("Please check %s for more details.",
 			util.ColorStatus("https://jenkins-x.io/docs/getting-started/first-project/create-quickstart/")),
 	},
 	"create lile": {
-		replacement: "create quickstart",
+		replacement: "jx create project",
 		date:        "Feb 1 2020",
 		info: fmt.Sprintf("Please check %s for more details.",
 			util.ColorStatus("https://jenkins-x.io/docs/getting-started/first-project/create-quickstart/")),
 	},
 	"create camel": {
-		replacement: "create quickstart",
+		replacement: "jx create project",
 		date:        "Feb 1 2020",
 		info: fmt.Sprintf("Please check %s for more details.",
 			util.ColorStatus("https://jenkins-x.io/docs/getting-started/first-project/create-quickstart/")),
 	},
 	"create jhipster": {
-		replacement: "create quickstart",
+		replacement: "jx create project",
 		date:        "Feb 1 2020",
 		info: fmt.Sprintf("Please check %s for more details.",
 			util.ColorStatus("https://jenkins-x.io/docs/getting-started/first-project/create-quickstart/")),
 	},
 	"create spring": {
-		replacement: "create quickstart",
-		date:        "Feb 1 2020",
+		replacement: "jx create project",
+		date:        "Mar 1 2020",
 		info: fmt.Sprintf("Please check %s for more details.",
-			util.ColorStatus("https://jenkins-x.io/docs/getting-started/first-project/create-quickstart/")),
+			util.ColorStatus("https://jenkins-x.io/commands/jx_create_project/")),
 	},
 	"create addon knative-build": {
 		date: "Feb 1 2020",
@@ -105,13 +101,13 @@ var deprecatedCommands map[string]deprecationInfo = map[string]deprecationInfo{
 		info: "No longer needed",
 	},
 	"upgrade platform": {
-		replacement: "upgrade boot",
-		date:        "Feb 1 2020",
+		replacement: "jx upgrade boot",
+		date:        "Jun 1 2020",
 		info: fmt.Sprintf("Please check %s for more details.",
 			util.ColorStatus("https://jenkins-x.io/docs/getting-started/setup/boot/")),
 	},
 	"upgrade cluster": {
-		replacement: "boot",
+		replacement: "jx boot",
 		date:        "Feb 1 2020",
 		info: fmt.Sprintf("Please check %s for more details.",
 			util.ColorStatus("https://jenkins-x.io/docs/getting-started/setup/boot/")),
@@ -123,13 +119,13 @@ var deprecatedCommands map[string]deprecationInfo = map[string]deprecationInfo{
 			util.ColorStatus("https://cloud.google.com/sdk/gcloud/")),
 	},
 	"upgrade ingress": {
-		replacement: "boot",
-		date:        "Feb 1 2020",
+		replacement: "jx boot",
+		date:        "Jun 1 2020",
 		info: fmt.Sprintf("Please check %s for more details.",
 			util.ColorStatus("https://jenkins-x.io/docs/getting-started/setup/boot/")),
 	},
 	"upgrade extensions": {
-		replacement: "upgrade apps",
+		replacement: "jx upgrade apps",
 		date:        "Feb 1 2020",
 		info: fmt.Sprintf("Please check %s for more details.",
 			util.ColorStatus("https://jenkins-x.io/docs/managing-jx/common-tasks/upgrade-jx/#upgrading-apps")),
@@ -171,15 +167,17 @@ var deprecatedCommands map[string]deprecationInfo = map[string]deprecationInfo{
 		date: "Feb 1 2020",
 		info: "This is now replaced by apps",
 	},
-	"edit deploy": {
-		date: "Feb 1 2020",
-	},
 	"edit extensionsrepository": {
 		date: "Feb 1 2020",
 		info: "This is now replaced by apps",
 	},
 	"step create jenkins": {
 		date: "Feb 1 2020",
+	},
+	"step create install values": {
+		replacement: "jx step verify ingress",
+		date:        "June 1 2020",
+		info:        "the command stays, its just been renamed to be with the other 'jx step verify ...' commands to improve the UX",
 	},
 	"step post": {
 		date: "Feb 1 2020",
@@ -188,12 +186,12 @@ var deprecatedCommands map[string]deprecationInfo = map[string]deprecationInfo{
 		date: "Feb 1 2020",
 	},
 	"step credential": {
-		date: "Feb 1 2020",
-		info: "This replaced by Tekton's mounted secrets",
+		date: "Jun 1 2020",
+		info: "This is replaced by Tekton's mounted secrets",
 	},
 	"step git credential": {
-		date: "Apr 1 2020",
-		info: "This replaced by Tekton's mounted secrets",
+		date: "Jun 1 2020",
+		info: "This is replaced by Tekton's mounted secrets",
 	},
 	"step split monorepo": {
 		date: "Feb 1 2020",
@@ -205,8 +203,8 @@ var deprecatedCommands map[string]deprecationInfo = map[string]deprecationInfo{
 		date: "Feb 1 2020",
 	},
 	"console": {
-		replacement: "ui",
-		date:        "Mar 1 2020",
+		replacement: "jx ui",
+		date:        "Jun 1 2020",
 		info:        "Classic Jenkins console will be replaced by Jenkins X UI app",
 	},
 	"controller workflow": {
@@ -234,6 +232,24 @@ func DeprecateCommands(cmd *cobra.Command) {
 	for _, c := range cmd.Commands() {
 		DeprecateCommands(c)
 	}
+}
+
+// GetRemovalDate returns the date when the command is planned to be removed
+func GetRemovalDate(cmd *cobra.Command) string {
+	path := commandPath(cmd)
+	if deprecation, ok := deprecatedCommands[path]; ok {
+		return deprecation.date
+	}
+	return ""
+}
+
+// GetReplacement returns the command replacement if any available
+func GetReplacement(cmd *cobra.Command) string {
+	path := commandPath(cmd)
+	if deprecation, ok := deprecatedCommands[path]; ok {
+		return deprecation.replacement
+	}
+	return ""
 }
 
 func deprecationMessage(dep deprecationInfo) string {

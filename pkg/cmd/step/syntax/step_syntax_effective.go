@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jenkins-x/jx/pkg/cmd/opts/step"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/jenkins-x/jx/pkg/versionstream"
 
@@ -48,6 +49,8 @@ type StepSyntaxEffectiveOptions struct {
 	CustomEnvs        []string
 	OutputFile        string
 	ShortView         bool
+
+	ValidateInCluster bool
 
 	PodTemplates map[string]*corev1.Pod
 
@@ -114,6 +117,7 @@ func (o *StepSyntaxEffectiveOptions) addFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&o.ProjectID, "project-id", "", "", "The cloud project ID. If not specified we default to the install project")
 	cmd.Flags().StringVarP(&o.DockerRegistry, "docker-registry", "", "", "The Docker Registry host name to use which is added as a prefix to docker images")
 	cmd.Flags().StringVarP(&o.DockerRegistryOrg, "docker-registry-org", "", "", "The Docker registry organisation. If blank the git repository owner is used")
+	cmd.Flags().BoolVarP(&o.ValidateInCluster, "validate-in-cluster", "", false, "Validate that resources referenced in the effective pipeline, such as volumes, exist in the current context cluster")
 }
 
 // Run implements this command
@@ -179,7 +183,7 @@ func (o *StepSyntaxEffectiveOptions) Run() error {
 	if err != nil {
 		return errors.Wrapf(err, "failed to find git information from dir %s", workingDir)
 	}
-	projectConfig, projectConfigFile, err := o.loadProjectConfig(workingDir)
+	projectConfig, projectConfigFile, err := o.LoadProjectConfig(workingDir)
 	if err != nil {
 		return errors.Wrapf(err, "failed to load project config in dir %s", workingDir)
 	}
@@ -441,10 +445,21 @@ func (o *StepSyntaxEffectiveOptions) createPipelineForKind(kind string, lifecycl
 		}
 	}
 
+	var kubeClient kubernetes.Interface
+	var ns string
+
+	// If we're validating in the cluster, get the kubeClient. Otherwise it'll be nil and ignored.
+	if o.ValidateInCluster {
+		kubeClient, ns, err = o.KubeClientAndDevNamespace()
+		if err != nil {
+			return nil, errors.Wrap(err, "unable to create Kube client")
+		}
+	}
+
 	// TODO: Seeing weird behavior seemingly related to https://golang.org/doc/faq#nil_error
 	// if err is reused, maybe we need to switch return types (perhaps upstream in build-pipeline)?
 	ctx := context.Background()
-	if validateErr := parsed.Validate(ctx); validateErr != nil {
+	if validateErr := parsed.ValidateInCluster(ctx, kubeClient, ns); validateErr != nil {
 		return nil, errors.Wrapf(validateErr, "validation failed for Pipeline")
 	}
 
@@ -488,7 +503,8 @@ func (o *StepSyntaxEffectiveOptions) getDockerRegistry(projectConfig *config.Pro
 	return dockerRegistry
 }
 
-func (o *StepSyntaxEffectiveOptions) loadProjectConfig(workingDir string) (*config.ProjectConfig, string, error) {
+// LoadProjectConfig loads the pipeline config from the given workingDir
+func (o *StepSyntaxEffectiveOptions) LoadProjectConfig(workingDir string) (*config.ProjectConfig, string, error) {
 	if o.Context != "" {
 		fileName := filepath.Join(workingDir, fmt.Sprintf("jenkins-x-%s.yml", o.Context))
 		exists, err := util.FileExists(fileName)

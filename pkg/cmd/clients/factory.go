@@ -2,6 +2,11 @@ package clients
 
 import (
 	"fmt"
+
+	"github.com/heptio/sonobuoy/pkg/client"
+	sonoboy_dynamic "github.com/heptio/sonobuoy/pkg/dynamic"
+	"k8s.io/client-go/dynamic"
+
 	"io"
 	"net/url"
 	"os"
@@ -22,8 +27,6 @@ import (
 	kubevault "github.com/jenkins-x/jx/pkg/kube/vault"
 	"github.com/jenkins-x/jx/pkg/log"
 
-	"github.com/heptio/sonobuoy/pkg/client"
-	"github.com/heptio/sonobuoy/pkg/dynamic"
 	"github.com/jenkins-x/jx/pkg/auth"
 	"github.com/jenkins-x/jx/pkg/client/clientset/versioned"
 	"github.com/jenkins-x/jx/pkg/gits"
@@ -36,7 +39,6 @@ import (
 	"k8s.io/client-go/rest"
 
 	vaultoperatorclient "github.com/banzaicloud/bank-vaults/operator/pkg/client/clientset/versioned"
-	build "github.com/knative/build/pkg/client/clientset/versioned"
 	kserve "github.com/knative/serving/pkg/client/clientset/versioned"
 	tektonclient "github.com/tektoncd/pipeline/pkg/client/clientset/versioned"
 	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
@@ -47,6 +49,8 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	prowjobclient "k8s.io/test-infra/prow/client/clientset/versioned"
 
 	"github.com/jenkins-x/jx/pkg/jxfactory"
 )
@@ -587,23 +591,6 @@ func (f *factory) CreateJXClient() (versioned.Interface, string, error) {
 	return f.jxFactory.CreateJXClient()
 }
 
-func (f *factory) CreateKnativeBuildClient() (build.Interface, string, error) {
-	config, err := f.CreateKubeConfig()
-	if err != nil {
-		return nil, "", err
-	}
-	kubeConfig, _, err := f.jxFactory.KubeConfig().LoadConfig()
-	if err != nil {
-		return nil, "", err
-	}
-	ns := kube.CurrentNamespace(kubeConfig)
-	client, err := build.NewForConfig(config)
-	if err != nil {
-		return nil, ns, err
-	}
-	return client, ns, err
-}
-
 func (f *factory) CreateKnativeServeClient() (kserve.Interface, string, error) {
 	config, err := f.CreateKubeConfig()
 	if err != nil {
@@ -621,11 +608,7 @@ func (f *factory) CreateKnativeServeClient() (kserve.Interface, string, error) {
 	return client, ns, err
 }
 
-func (f *factory) CreateTektonClient() (tektonclient.Interface, string, error) {
-	return f.jxFactory.CreateTektonClient()
-}
-
-func (f *factory) CreateDynamicClient() (*dynamic.APIHelper, string, error) {
+func (f *factory) CreateProwJobClient() (prowjobclient.Interface, string, error) {
 	config, err := f.CreateKubeConfig()
 	if err != nil {
 		return nil, "", err
@@ -635,7 +618,28 @@ func (f *factory) CreateDynamicClient() (*dynamic.APIHelper, string, error) {
 		return nil, "", err
 	}
 	ns := kube.CurrentNamespace(kubeConfig)
-	client, err := dynamic.NewAPIHelperFromRESTConfig(config)
+	client, err := prowjobclient.NewForConfig(config)
+	if err != nil {
+		return nil, ns, err
+	}
+	return client, ns, err
+}
+
+func (f *factory) CreateTektonClient() (tektonclient.Interface, string, error) {
+	return f.jxFactory.CreateTektonClient()
+}
+
+func (f *factory) CreateDynamicClient() (dynamic.Interface, string, error) {
+	config, err := f.CreateKubeConfig()
+	if err != nil {
+		return nil, "", err
+	}
+	kubeConfig, _, err := f.jxFactory.KubeConfig().LoadConfig()
+	if err != nil {
+		return nil, "", err
+	}
+	ns := kube.CurrentNamespace(kubeConfig)
+	client, err := dynamic.NewForConfig(config)
 	if err != nil {
 		return nil, ns, err
 	}
@@ -714,7 +718,7 @@ func (f *factory) CreateComplianceClient() (*client.SonobuoyClient, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "compliance client failed to load the Kubernetes configuration")
 	}
-	skc, err := dynamic.NewAPIHelperFromRESTConfig(config)
+	skc, err := sonoboy_dynamic.NewAPIHelperFromRESTConfig(config)
 	if err != nil {
 		return nil, errors.Wrap(err, "compliance dynamic client failed to be created")
 	}

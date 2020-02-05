@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jenkins-x/jx/pkg/cmd/step/git/credentials"
+
 	"github.com/jenkins-x/jx/pkg/cmd/create/options"
 
 	"github.com/jenkins-x/jx/pkg/cmd/opts/step"
@@ -19,7 +21,6 @@ import (
 	"github.com/jenkins-x/jx/pkg/kube/naming"
 
 	"github.com/jenkins-x/jx/pkg/cmd/helper"
-	"github.com/jenkins-x/jx/pkg/cmd/step/git"
 	"github.com/jenkins-x/jx/pkg/gits"
 	v12 "k8s.io/client-go/kubernetes/typed/core/v1"
 
@@ -97,7 +98,7 @@ type CreateDevPodOptions struct {
 	ServiceAccount  string
 	PullSecrets     string
 
-	GitCredentials git.StepGitCredentialsOptions
+	GitCredentials credentials.StepGitCredentialsOptions
 
 	Results CreateDevPodResults
 }
@@ -108,7 +109,7 @@ func NewCmdCreateDevPod(commonOpts *opts.CommonOptions) *cobra.Command {
 		CreateOptions: options.CreateOptions{
 			CommonOptions: commonOpts,
 		},
-		GitCredentials: git.StepGitCredentialsOptions{
+		GitCredentials: credentials.StepGitCredentialsOptions{
 			StepOptions: step.StepOptions{
 				CommonOptions: commonOpts,
 			},
@@ -136,7 +137,7 @@ func NewCmdCreateDevPod(commonOpts *opts.CommonOptions) *cobra.Command {
 	cmd.Flags().BoolVarP(&options.Reuse, "reuse", "", true, "Reuse an existing DevPod if a suitable one exists. The DevPod will be selected based on the label (or current working directory)")
 	cmd.Flags().BoolVarP(&options.Sync, "sync", "", false, "Also synchronise the local file system into the DevPod")
 	cmd.Flags().IntSliceVarP(&options.Ports, "ports", "p", []int{}, "Container ports exposed by the DevPod")
-	cmd.Flags().BoolVarP(&options.AutoExpose, "auto-expose", "", true, "Automatically expose useful ports as services such as the debug port, as well as any ports specified using --ports")
+	cmd.Flags().BoolVarP(&options.AutoExpose, "auto-expose", "", false, "Automatically expose useful ports via ingresses such as the ide port, debug port, as well as any ports specified using --ports")
 	cmd.Flags().BoolVarP(&options.Persist, "persist", "", false, "Persist changes made to the DevPod. Cannot be used with --sync")
 	cmd.Flags().StringVarP(&options.ImportURL, "import-url", "u", "", "Clone a Git repository into the DevPod. Cannot be used with --sync")
 	cmd.Flags().BoolVarP(&options.Import, "import", "", true, "Detect if there is a Git repository in the current directory and attempt to clone it into the DevPod. Ignored if used with --sync")
@@ -154,28 +155,30 @@ func NewCmdCreateDevPod(commonOpts *opts.CommonOptions) *cobra.Command {
 
 // Run implements this command
 func (o *CreateDevPodOptions) Run() error {
-	addedServices := false
-
 	if o.Persist && o.Sync {
-		return errors.New("Cannot specify --persist and --sync")
+		return errors.New("cannot specify --persist and --sync")
 	}
 
 	if o.ImportURL != "" && o.Sync {
-		return errors.New("Cannot specify --import-url && --sync")
+		return errors.New("cannot specify --import-url && --sync")
 	}
 
 	client, curNs, err := o.KubeClientAndNamespace()
 	if err != nil {
-		return err
+		return errors.Wrap(err, "creating kubernetes client")
 	}
 	ns, _, err := kube.GetDevNamespace(client, curNs)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "getting the dev namespce")
+	}
+
+	if o.AutoExpose && !o.isAutoExposeSecure(client, ns) {
+		return errors.New("skipping creating the DevPod because auto-expose is insecure")
 	}
 
 	userName, err := o.GetUsername(o.Username)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "getting the current user")
 	}
 
 	dir := o.Dir
@@ -186,7 +189,7 @@ func (o *CreateDevPodOptions) Run() error {
 		}
 		dir, err = ioutil.TempDir("", username+"-")
 		if err != nil {
-			return errors.Wrapf(err, "failed to create a temp dir")
+			return errors.Wrapf(err, "creating a temp dir")
 		}
 		defer os.RemoveAll(dir)
 		o.Dir = dir
@@ -194,7 +197,7 @@ func (o *CreateDevPodOptions) Run() error {
 	if dir == "" {
 		dir, err = os.Getwd()
 		if err != nil {
-			return err
+			return errors.Wrap(err, "getting the working directory")
 		}
 	}
 	if importURL == "" {
@@ -239,15 +242,14 @@ func (o *CreateDevPodOptions) Run() error {
 		} else {
 			gitLabelKey = fmt.Sprintf("%s-%s-%s-%s", kube.LabelDevPodGitPrefix, gitInfo.Host, gitInfo.Organisation, gitInfo.Name)
 			gitLabelValue = naming.ToValidNameWithDots(importURL)
-			// lets query to see if there is a DevPod already for t
-			// his URL
+			// lets query to see if there is a DevPod already for this URL
 			matchLabels := map[string]string{
 				kube.LabelDevPodUsername: userName,
 				gitLabelKey:              gitLabelValue,
 			}
 			pod, err = o.findDevPodBySelector(podResources, matchLabels, dir)
 			if err != nil {
-				return err
+				return errors.Wrapf(err, "finding DevPod by selector: %v", matchLabels)
 			}
 			if pod != nil {
 				name = pod.Name
@@ -263,13 +265,13 @@ func (o *CreateDevPodOptions) Run() error {
 
 			err = o.Git().ShallowClone(dir, importURL, "master", "")
 			if err != nil {
-				return errors.Wrapf(err, "failed to git clone: %s into dir %s", importURL, dir)
+				return errors.Wrapf(err, "git cloning shallow: %s into dir %s", importURL, dir)
 			}
 		}
 
 		podTemplates, err := kube.LoadPodTemplates(client, ns)
 		if err != nil {
-			return err
+			return errors.Wrapf(err, "loading the pod templates from namesapce %q", ns)
 		}
 		podTemplateKeys := map[string]string{}
 		for k := range podTemplates {
@@ -280,7 +282,7 @@ func (o *CreateDevPodOptions) Run() error {
 		if label == "" {
 			label, err = o.guessDevPodLabel(dir, labels)
 			if err != nil {
-				return err
+				return errors.Wrap(err, "guessing the DevPod label")
 			}
 
 			if label == "javascript" {
@@ -290,7 +292,7 @@ func (o *CreateDevPodOptions) Run() error {
 		if label == "" {
 			label, err = util.PickName(labels, "Pick which kind of DevPod you wish to create: ", "", o.GetIOFileHandles())
 			if err != nil {
-				return err
+				return errors.Wrap(err, "picking the kind of DevPod to create")
 			}
 		}
 		pod = podTemplates[label]
@@ -300,7 +302,7 @@ func (o *CreateDevPodOptions) Run() error {
 
 		editEnv, err = o.getOrCreateEditEnvironment()
 		if err != nil {
-			return err
+			return errors.Wrap(err, "getting or creating the edit environment")
 		}
 
 		// If the user passed in Image Pull Secrets, patch them in to the edit env's default service account
@@ -308,7 +310,7 @@ func (o *CreateDevPodOptions) Run() error {
 			imagePullSecrets := strings.Fields(o.PullSecrets)
 			err = serviceaccount.PatchImagePullSecrets(client, editEnv.Spec.Namespace, "default", imagePullSecrets)
 			if err != nil {
-				return fmt.Errorf("Failed to add pull secrets %s to service account default in namespace %s: %v", imagePullSecrets, editEnv.Spec.Namespace, err)
+				return fmt.Errorf("failed to add pull secrets %s to service account default in namespace %s: %v", imagePullSecrets, editEnv.Spec.Namespace, err)
 			}
 		}
 
@@ -325,7 +327,7 @@ func (o *CreateDevPodOptions) Run() error {
 		}
 		names, err := kube.GetPodNames(client, ns, "")
 		if err != nil {
-			return err
+			return errors.Wrap(err, "getting pod names")
 		}
 
 		name = uniquePodName(names, name)
@@ -340,7 +342,7 @@ func (o *CreateDevPodOptions) Run() error {
 		}
 
 		if len(pod.Spec.Containers) == 0 {
-			return fmt.Errorf("No containers specified for label %s with pod: %#v", label, pod)
+			return fmt.Errorf("no containers specified for label %s with pod: %#v", label, pod)
 		}
 		container1 := &pod.Spec.Containers[0]
 
@@ -395,12 +397,12 @@ func (o *CreateDevPodOptions) Run() error {
 			if sa == "" {
 				prow, err := o.IsProw()
 				if err != nil {
-					return err
+					return errors.Wrap(err, "checking if prow is active")
 				}
 
 				settings, err := o.TeamSettings()
 				if err != nil {
-					return err
+					return errors.Wrap(err, "getting the team settings")
 				}
 
 				sa = "jenkins"
@@ -427,7 +429,7 @@ func (o *CreateDevPodOptions) Run() error {
 			o.BatchMode = true
 			resolver, err := o.GetVersionResolver()
 			if err != nil {
-				return err
+				return errors.Wrap(err, "getting the version stream resolver")
 			}
 			o.BatchMode = batch
 
@@ -435,7 +437,7 @@ func (o *CreateDevPodOptions) Run() error {
 			if o.Theia {
 				image, err := resolver.ResolveDockerImage("theiaide/theia-full")
 				if err != nil {
-					return err
+					return errors.Wrap(err, "resolving the container image for Theia IDE")
 				}
 				editorContainer := corev1.Container{
 					Name:  ideContainerName,
@@ -473,13 +475,12 @@ func (o *CreateDevPodOptions) Run() error {
 					Command: []string{"yarn", "theia", "start", "/workspace", "--hostname=0.0.0.0"},
 				}
 				pod.Spec.Containers = append(pod.Spec.Containers, editorContainer)
-
 			} else {
 				setupWorkspaceCommand += " --vscode"
 				idePort = 8443
 				image, err := resolver.ResolveDockerImage("codercom/code-server")
 				if err != nil {
-					return err
+					return errors.Wrap(err, "resolving the container image for VS Code")
 				}
 				editorContainer := corev1.Container{
 					Name:  ideContainerName,
@@ -597,21 +598,20 @@ func (o *CreateDevPodOptions) Run() error {
 		}
 
 		// Assign the container the ports provided automatically
-		if o.AutoExpose {
-			exposeServicePorts = o.Ports
-			if portsStr, ok := pod.Annotations["jenkins-x.io/devpodPorts"]; ok {
-				ports := strings.Split(portsStr, ", ")
-				for _, portStr := range ports {
-					port, _ := strconv.Atoi(portStr)
-					exposeServicePorts = append(exposeServicePorts, port)
-					cp := corev1.ContainerPort{
-						Name:          fmt.Sprintf("port-%d", port),
-						ContainerPort: int32(port),
-					}
-					container1.Ports = append(container1.Ports, cp)
+		exposeServicePorts = o.Ports
+		if portsStr, ok := pod.Annotations["jenkins-x.io/devpodPorts"]; ok {
+			ports := strings.Split(portsStr, ", ")
+			for _, portStr := range ports {
+				port, _ := strconv.Atoi(portStr)
+				exposeServicePorts = append(exposeServicePorts, port)
+				cp := corev1.ContainerPort{
+					Name:          fmt.Sprintf("port-%d", port),
+					ContainerPort: int32(port),
 				}
+				container1.Ports = append(container1.Ports, cp)
 			}
 		}
+
 		if o.Reuse {
 			matchLabels := map[string]string{
 				kube.LabelPodTemplate:    label,
@@ -631,7 +631,7 @@ func (o *CreateDevPodOptions) Run() error {
 					pod.Labels[gitLabelKey] = gitLabelValue
 					_, err = podResources.Update(pod)
 					if err != nil {
-						log.Logger().Warnf("failed to update label of pod %s: %s", pod.Name, err.Error())
+						log.Logger().Warnf("Failed to update label of pod %s: %s", pod.Name, err.Error())
 					}
 				}
 			}
@@ -643,25 +643,27 @@ func (o *CreateDevPodOptions) Run() error {
 		o.NotifyProgress(opts.LogInfo, "Creating a DevPod of label: %s\n", util.ColorInfo(label))
 		_, err = podResources.Create(pod)
 		if err != nil {
-			return fmt.Errorf("Failed to create pod %s\npod: %#v", err, pod)
+			return fmt.Errorf("failed to create pod %s\npod: %#v", err, pod)
 		}
 
-		err := o.ensureEditEnvironmentHasExposeController(editEnv)
-		if err != nil {
-			return err
+		if o.AutoExpose {
+			err := o.ensureEditEnvironmentHasExposeController(editEnv)
+			if err != nil {
+				return errors.Wrap(err, "ensuring that edit environment has expose-controller")
+			}
 		}
 
 		o.NotifyProgress(opts.LogInfo, "Created pod %s - waiting for it to be ready...\n", util.ColorInfo(name))
 
 		err = kube.WaitForPodNameToBeReady(client, ns, name, time.Hour)
 		if err != nil {
-			return err
+			return errors.Wrapf(err, "waiting for POD %q to be ready", name)
 		}
 
 		// Get the pod UID
 		pod, err = client.CoreV1().Pods(ns).Get(name, metav1.GetOptions{})
 		if err != nil {
-			return err
+			return errors.Wrapf(err, "getting the POD %q", name)
 		}
 
 		// Create PVC if needed
@@ -687,16 +689,21 @@ func (o *CreateDevPodOptions) Run() error {
 				},
 			}
 			_, err = client.CoreV1().PersistentVolumeClaims(curNs).Create(&pvc)
-
 			if err != nil {
-				return err
+				return errors.Wrapf(err, "creating the persistent volume claim %q in namespace %q", pvc.Name, curNs)
 			}
 		}
 
 		// Create services
+		var addedServices []string
 
+		svcAnotations := map[string]string{}
+		if o.AutoExpose {
+			svcAnotations = map[string]string{
+				"fabric8.io/expose": "true",
+			}
+		}
 		// Create a service for every port we expose
-
 		if len(exposeServicePorts) > 0 {
 			for _, port := range exposeServicePorts {
 				portName := fmt.Sprintf("%s-%d", pod.Name, port)
@@ -709,10 +716,8 @@ func (o *CreateDevPodOptions) Run() error {
 				}
 				service := corev1.Service{
 					ObjectMeta: metav1.ObjectMeta{
-						Annotations: map[string]string{
-							"fabric8.io/expose": "true",
-						},
-						Name: fmt.Sprintf("%s-port-%d", pod.Name, port),
+						Annotations: svcAnotations,
+						Name:        fmt.Sprintf("%s-port-%d", pod.Name, port),
 						OwnerReferences: []metav1.OwnerReference{
 							kube.PodOwnerRef(pod),
 						},
@@ -725,22 +730,18 @@ func (o *CreateDevPodOptions) Run() error {
 					},
 				}
 				_, err = client.CoreV1().Services(curNs).Create(&service)
-
 				if err != nil {
-					return err
+					return errors.Wrapf(err, "creating service %q in namespace %q", service.Name, curNs)
 				}
+				addedServices = append(addedServices, service.Name)
 			}
-			addedServices = true
 		}
 		if !o.Sync {
-
 			// Create a service for the IDE
 			ideService := corev1.Service{
 				ObjectMeta: metav1.ObjectMeta{
-					Annotations: map[string]string{
-						"fabric8.io/expose": "true",
-					},
-					Name: ideServiceName,
+					Annotations: svcAnotations,
+					Name:        ideServiceName,
 					OwnerReferences: []metav1.OwnerReference{
 						kube.PodOwnerRef(pod),
 					},
@@ -760,63 +761,85 @@ func (o *CreateDevPodOptions) Run() error {
 			}
 			_, err = client.CoreV1().Services(curNs).Create(&ideService)
 			if err != nil {
-				return err
+				return errors.Wrapf(err, "creating the service %q for IDE in namespace %q", ideService.Name, curNs)
 			}
-			addedServices = true
+			addedServices = append(addedServices, ideServiceName)
 		}
 
-		if addedServices {
-			err = o.updateExposeController(client, ns, ns)
-
+		if len(addedServices) > 0 && o.AutoExpose {
+			err = o.updateExposeController(client, ns, ns, addedServices...)
 			if err != nil {
-				return err
+				return errors.Wrapf(err, "updating the expose controller in namespace %s", ns)
 			}
 		}
-
 	}
 
 	o.NotifyProgress(opts.LogInfo, "Pod %s is now ready!\n", util.ColorInfo(pod.Name))
 	log.Logger().Infof("You can open other shells into this DevPod via %s", util.ColorInfo("jx create devpod"))
 
 	if !o.Sync {
-		ideServiceURL, err := services.FindServiceURL(client, curNs, ideServiceName)
-		if err != nil {
-			return err
-		}
-		if ideServiceURL != "" {
-			pod, err = client.CoreV1().Pods(curNs).Get(name, metav1.GetOptions{})
-			pod.Annotations["jenkins-x.io/devpod_IDE_URL"] = ideServiceURL
-			pod, err = client.CoreV1().Pods(curNs).Update(pod)
+		if o.AutoExpose {
+			ideServiceURL, err := services.FindServiceURL(client, curNs, ideServiceName)
 			if err != nil {
-				return err
+				return errors.Wrapf(err, "finding the URL for service %q", ideServiceName)
 			}
-			log.Logger().Infof("\nYou can edit your app using the Web IDE at: %s", util.ColorInfo(ideServiceURL))
-			o.Results.TheaServiceURL = ideServiceURL
+			if ideServiceURL != "" {
+				pod, err = client.CoreV1().Pods(curNs).Get(name, metav1.GetOptions{})
+				if err != nil {
+					return errors.Wrapf(err, "getting the POD %q in namespace %q", name, curNs)
+				}
+				pod.Annotations["jenkins-x.io/devpod_IDE_URL"] = ideServiceURL
+				pod, err = client.CoreV1().Pods(curNs).Update(pod)
+				if err != nil {
+					return errors.Wrapf(err, "updating the POD %q in namespace %q", name, curNs)
+				}
+				log.Logger().Infof("\nYou can edit your app using the Web IDE at: %s", util.ColorInfo(ideServiceURL))
+				o.Results.TheaServiceURL = ideServiceURL
+			} else {
+				o.NotifyProgress(opts.LogWarning, "Could not find service with name %s in namespace %s\n", ideServiceName, curNs)
+			}
 		} else {
-			o.NotifyProgress(opts.LogWarning, "Could not find service with name %s in namespace %s\n", ideServiceName, curNs)
+			exposeCmd := fmt.Sprintf("kubectl port-forward svc/%s 8080:80", ideServiceName)
+			log.Logger().Info("\nYou can access the Web IDE to edit your app with command:")
+			log.Logger().Infof("* %s", util.ColorInfo(exposeCmd))
 		}
 	}
 
-	exposePortServices, err := services.GetServiceNames(client, curNs, fmt.Sprintf("%s-port-", pod.Name))
-	if err != nil {
-		return err
-	}
-	var exposePortURLs []string
-	for _, svcName := range exposePortServices {
-		u, err := services.GetServiceURLFromName(client, svcName, curNs)
+	if o.AutoExpose {
+		exposePortServices, err := services.GetServiceNames(client, curNs, fmt.Sprintf("%s-port-", pod.Name))
 		if err != nil {
-			return err
+			return errors.Wrapf(err, "getting the exposed services for POD %q in namespace %q", pod.Name, curNs)
 		}
-		exposePortURLs = append(exposePortURLs, u)
-	}
-	if len(exposePortURLs) > 0 {
-		log.Logger().Infof("\nYou can access the DevPod from your browser via the following URLs:")
-		for _, u := range exposePortURLs {
-			log.Logger().Infof("* %s", util.ColorInfo(u))
+		var exposePortURLs []string
+		for _, svcName := range exposePortServices {
+			u, err := services.GetServiceURLFromName(client, svcName, curNs)
+			if err != nil {
+				return errors.Wrapf(err, "getting the service URL from service name %q in namespace %q", svcName, curNs)
+			}
+			exposePortURLs = append(exposePortURLs, u)
+		}
+		if len(exposePortURLs) > 0 {
+			log.Logger().Infof("\nYou can access the DevPod from your browser via the following URLs:")
+			for _, u := range exposePortURLs {
+				log.Logger().Infof("* %s", util.ColorInfo(u))
+			}
+			log.Logger().Info("")
+
+			o.Results.ExposePortURLs = exposePortURLs
+		}
+	} else {
+		exposePortServices, err := services.GetServiceNames(client, curNs, fmt.Sprintf("%s-port-", pod.Name))
+		if err != nil {
+			return errors.Wrapf(err, "getting the exposed services for POD %q in namesapce %q", pod.Name, curNs)
+		}
+		localPort := 8081
+		log.Logger().Info("\nYou can access the DevPod locally with the following commands:")
+		for _, svcName := range exposePortServices {
+			exposeCmd := fmt.Sprintf("kubectl port-forward svc/%s %d:80", svcName, localPort)
+			log.Logger().Infof("* %s", util.ColorInfo(exposeCmd))
+			localPort++
 		}
 		log.Logger().Info("")
-
-		o.Results.ExposePortURLs = exposePortURLs
 	}
 
 	if o.Sync {
@@ -829,7 +852,7 @@ func (o *CreateDevPodOptions) Run() error {
 		}
 		err = syncOptions.CreateKsync(client, ns, pod.Name, dir, workingDir, userName)
 		if err != nil {
-			return err
+			return errors.Wrap(err, "creating ksync")
 		}
 	}
 
@@ -851,19 +874,22 @@ func (o *CreateDevPodOptions) Run() error {
 			if err != nil {
 				return errors.Wrap(err, "creating git auth config service")
 			}
-			gitCredentials, err := o.GitCredentials.CreateGitCredentials(gitAuthSvc)
+			gitCredentials, err := o.GitCredentials.CreateGitCredentialsFromAuthService(gitAuthSvc)
+			if err != nil {
+				return errors.Wrap(err, "creating git credentials")
+			}
+			data, err := o.GitCredentials.GitCredentialsFileData(gitCredentials)
 			if err != nil {
 				return errors.Wrap(err, "creating git credentials")
 			}
 			theiaRshExec := []string{
-				fmt.Sprintf("echo \"%s\" >> ~/.git-credentials", string(gitCredentials)),
+				fmt.Sprintf("echo \"%s\" >> ~/.git-credentials", string(data)),
 				"git config --global credential.helper store",
 			}
 
 			// Configure remote username and email for git
 			username, _ := o.Git().Username("")
 			email, _ := o.Git().Email("")
-
 			if username != "" {
 				theiaRshExec = append(theiaRshExec, fmt.Sprintf("git config --global user.name \"%s\"", username))
 			}
@@ -886,7 +912,7 @@ func (o *CreateDevPodOptions) Run() error {
 			options.Args = []string{}
 			err = options.Run()
 			if err != nil {
-				return err
+				return errors.Wrapf(err, "opening a remote shell into the DevPod %q", pod.Name)
 			}
 		}
 	}
@@ -930,25 +956,48 @@ func (o *CreateDevPodOptions) Run() error {
 	return options.Run()
 }
 
+func (o *CreateDevPodOptions) isAutoExposeSecure(client kubernetes.Interface, ns string) bool {
+	ingressConfig, err := kube.GetIngressConfig(client, ns)
+	tlsEnabled := false
+	if err == nil {
+		tlsEnabled = ingressConfig.TLS && ingressConfig.Issuer != ""
+	}
+	if tlsEnabled {
+		return true
+	}
+
+	if o.BatchMode {
+		return false
+	}
+
+	help := "TLS doesn't seem to be enabled in the ingress-config. This setup is insecure to use with a basic auth password."
+	message := "Do you want to use an insecure connection to expose the DevPod?"
+	confirmed, err := util.Confirm(message, false, help, o.GetIOFileHandles())
+	if confirmed && err == nil {
+		return true
+	}
+	return false
+}
+
 func (o *CreateDevPodOptions) getOrCreateEditEnvironment() (*v1.Environment, error) {
 	var env *v1.Environment
 
 	kubeClient, err := o.KubeClient()
 	if err != nil {
-		return env, err
+		return env, errors.Wrap(err, "creating kubernetes client")
 	}
 
 	jxClient, ns, err := o.JXClientAndDevNamespace()
 	if err != nil {
-		return env, err
+		return env, errors.Wrap(err, "crating jx client")
 	}
 	userName, err := o.GetUsername(o.Username)
 	if err != nil {
-		return env, err
+		return env, errors.Wrap(err, "getting the current username")
 	}
 	env, err = kube.EnsureEditEnvironmentSetup(kubeClient, jxClient, ns, userName)
 	if err != nil {
-		return env, err
+		return env, errors.Wrapf(err, "ensuring the edit environment in the namespace %q", ns)
 	}
 	return env, err
 }
@@ -956,7 +1005,7 @@ func (o *CreateDevPodOptions) getOrCreateEditEnvironment() (*v1.Environment, err
 func (o *CreateDevPodOptions) ensureEditEnvironmentHasExposeController(env *v1.Environment) error {
 	kubeClient, err := o.KubeClient()
 	if err != nil {
-		return err
+		return errors.Wrap(err, "getting the kubernetes client")
 	}
 	// lets ensure that we've installed the exposecontroller service in the namespace
 	var flag bool
@@ -973,6 +1022,9 @@ func (o *CreateDevPodOptions) ensureEditEnvironmentHasExposeController(env *v1.E
 			HelmUpdate:  true,
 			SetValues:   nil,
 		})
+	}
+	if err != nil {
+		return errors.Wrapf(err, "installing chart %q in namespace %q", kube.ChartExposecontrollerService, editNs)
 	}
 	return err
 }
@@ -996,7 +1048,7 @@ func (o *CreateDevPodOptions) guessDevPodLabel(dir string, labels []string) (str
 		}
 		answer, err = o.InvokeDraftPack(args)
 		if err != nil {
-			return answer, errors.Wrapf(err, "failed to discover task pack in dir %s", o.Dir)
+			return answer, errors.Wrapf(err, "discovering the task pack in dir %s", o.Dir)
 		}
 		if answer != "" {
 			return answer, nil
@@ -1010,33 +1062,47 @@ func (o *CreateDevPodOptions) guessDevPodLabel(dir string, labels []string) (str
 			if err != nil {
 				return answer, errors.Wrapf(err, "could not extract the pod template label from file: %s", jenkinsfile)
 			}
-
 		}
 	}
 	return answer, nil
 }
 
 // updateExposeController lets update the exposecontroller to expose any new Service resources created for this devpod
-func (o *CreateDevPodOptions) updateExposeController(client kubernetes.Interface, devNs string, ns string) error {
-	ingressConfig, err := kube.GetIngressConfig(client, devNs)
+func (o *CreateDevPodOptions) updateExposeController(client kubernetes.Interface, devNs string, ns string, serviceNames ...string) error {
+	ic, err := kube.GetIngressConfig(client, devNs)
 	if err != nil {
-		return errors.Wrapf(err, "Failed to load ingress-config in namespace %s", devNs)
+		return errors.Wrapf(err, "loading the ingress-config in namespace %s", devNs)
 	}
-	return o.RunExposecontroller(ns, ns, ingressConfig)
+
+	if err := services.AnnotateServicesWithBasicAuth(client, ns, serviceNames...); err != nil {
+		return errors.Wrapf(err, "annotating the exposed services to enable basic authentication")
+	}
+
+	if ic.TLS && ic.Issuer != "" {
+		if _, err := services.AnnotateServicesWithCertManagerIssuer(client, ns, ic.Issuer, ic.ClusterIssuer, serviceNames...); err != nil {
+			return errors.Wrapf(err, "annotating the exposed services with cert-manager issuer")
+		}
+	}
+
+	err = o.RunExposecontroller(ns, ns, ic, serviceNames...)
+	if err != nil {
+		return errors.Wrapf(err, "running the expose controller in the namespace %q", ns)
+	}
+	return nil
 }
 
 func (o *CreateDevPodOptions) findDevPodBySelector(podResources v12.PodInterface, matchLabels map[string]string, dir string) (*corev1.Pod, error) {
 	var pod *corev1.Pod
 	selector, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: matchLabels})
 	if err != nil {
-		return pod, err
+		return pod, errors.Wrapf(err, "converting label selector: %v", matchLabels)
 	}
 	options := metav1.ListOptions{
 		LabelSelector: selector.String(),
 	}
 	podsList, err := podResources.List(options)
 	if err != nil {
-		return pod, err
+		return pod, errors.Wrap(err, "listing PODs")
 	}
 	for _, p := range podsList.Items {
 		ann := p.Annotations
@@ -1062,11 +1128,11 @@ func FindDevPodLabelFromJenkinsfile(filename string, labels []string) (string, e
 	answer := ""
 	data, err := ioutil.ReadFile(filename)
 	if err != nil {
-		return answer, err
+		return answer, errors.Wrapf(err, "reading file %q", filename)
 	}
 	r, err := regexp.Compile(`label\s+\"(.+)\"`)
 	if err != nil {
-		return answer, err
+		return answer, errors.Wrap(err, "compiling the regexp")
 	}
 
 	jenkinsXLabelPrefix := "jenkins-"
@@ -1086,7 +1152,7 @@ func FindDevPodLabelFromJenkinsfile(filename string, labels []string) (string, e
 						return a, nil
 					}
 				}
-				return answer, fmt.Errorf("Cannot find pipeline agent %s in the list of available DevPods: %s", a, strings.Join(labels, ", "))
+				return answer, fmt.Errorf("cannot find pipeline agent %s in the list of available DevPods: %s", a, strings.Join(labels, ", "))
 			}
 		}
 	}

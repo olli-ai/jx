@@ -301,7 +301,9 @@ func (o *CommonOptions) Installhyperv() error {
 
 		message := fmt.Sprintf("Would you like to restart your computer?")
 
-		if util.Confirm(message, true, "Please indicate if you would like to restart your computer.", o.GetIOFileHandles()) {
+		if answer, err := util.Confirm(message, true, "Please indicate if you would like to restart your computer.", o.GetIOFileHandles()); err != nil {
+			return err
+		} else if answer {
 
 			err = o.RunCommand("powershell", "Enable-WindowsOptionalFeature", "-Online", "-FeatureName", "Microsoft-Hyper-V", "-All", "-NoRestart")
 			if err != nil {
@@ -355,7 +357,7 @@ func (o *CommonOptions) InstallHelm() error {
 		return err
 	}
 
-	clientURL := fmt.Sprintf("https://storage.googleapis.com/kubernetes-helm/helm-v%s-%s-%s.tar.gz", stableVersion, runtime.GOOS, runtime.GOARCH)
+	clientURL := fmt.Sprintf("https://get.helm.sh/helm-v%s-%s-%s.tar.gz", stableVersion, runtime.GOOS, runtime.GOARCH)
 	fullPath := filepath.Join(binDir, fileName)
 	tarFile := fullPath + ".tgz"
 	err = packages.DownloadFile(clientURL, tarFile)
@@ -396,7 +398,7 @@ func (o *CommonOptions) InstallTiller() error {
 				return err
 			}
 	*/
-	clientURL := fmt.Sprintf("https://storage.googleapis.com/kubernetes-helm/helm-v%s-%s-%s.tar.gz", latestVersion, runtime.GOOS, runtime.GOARCH)
+	clientURL := fmt.Sprintf("https://get.helm.sh/helm-v%s-%s-%s.tar.gz", latestVersion, runtime.GOOS, runtime.GOARCH)
 	fullPath := filepath.Join(binDir, fileName)
 	helmFullPath := filepath.Join(binDir, "helm")
 	tarFile := fullPath + ".tgz"
@@ -1069,11 +1071,7 @@ func (o *CommonOptions) InstallProw(useTekton bool, useExternalDNS bool, isGitOp
 		}
 	}
 
-	knativeOrTekton := "tekton"
-	if !useTekton {
-		knativeOrTekton = "knative"
-	}
-	log.Logger().Infof("Installing %s into namespace %s", knativeOrTekton, util.ColorInfo(devNamespace))
+	log.Logger().Infof("Installing Tekton into namespace %s", util.ColorInfo(devNamespace))
 
 	ksecretValues := []string{}
 	if settings.HelmTemplate || settings.NoTiller || settings.HelmBinary != "helm" {
@@ -1083,46 +1081,25 @@ func (o *CommonOptions) InstallProw(useTekton bool, useExternalDNS bool, isGitOp
 
 	prowVersion := o.Version
 
-	if useTekton {
-		setValues = append(setValues,
-			"auth.git.username="+gitUsername)
+	setValues = append(setValues,
+		"auth.git.username="+gitUsername)
 
-		ksecretValues = append(ksecretValues,
-			"auth.git.password="+o.OAUTHToken)
+	ksecretValues = append(ksecretValues,
+		"auth.git.password="+o.OAUTHToken)
 
-		err = o.Retry(2, time.Second, func() (err error) {
-			return o.InstallChartOrGitOps(isGitOps, gitOpsEnvDir, kube.DefaultTektonReleaseName,
-				kube.ChartTekton, "tekton", "", devNamespace, true, setValues, ksecretValues, valuesFiles, "")
-		})
-		if err != nil {
-			return errors.Wrap(err, "failed to install Tekton")
-		}
-
-		setValues = append(setValues,
-			"buildnum.enabled=false",
-			"build.enabled=false",
-			"pipelinerunner.enabled=true",
-		)
-
-	} else {
-		setValues = append(setValues, "build.auth.git.username="+gitUsername)
-		ksecretValues = append(ksecretValues, "build.auth.git.username="+gitUsername, "build.auth.git.password="+o.OAUTHToken)
-		err = o.Retry(2, time.Second, func() (err error) {
-			return o.InstallChartOrGitOps(isGitOps, gitOpsEnvDir, kube.DefaultKnativeBuildReleaseName,
-				kube.ChartKnativeBuild, "knativebuild", "", devNamespace, true, setValues, ksecretValues, valuesFiles, "")
-		})
-		if err != nil {
-			return errors.Wrap(err, "failed to install Knative build")
-		}
-
-		// lets use the stable knative build prow
-		if prowVersion == "" {
-			prowVersion, err = o.GetVersionNumber(versionstream.KindChart, "jenkins-x/prow-knative", "", "")
-			if err != nil {
-				return errors.Wrap(err, "failed to find Prow Knative build version")
-			}
-		}
+	err = o.Retry(2, time.Second, func() (err error) {
+		return o.InstallChartOrGitOps(isGitOps, gitOpsEnvDir, kube.DefaultTektonReleaseName,
+			kube.ChartTekton, "tekton", "", devNamespace, true, setValues, ksecretValues, valuesFiles, "")
+	})
+	if err != nil {
+		return errors.Wrap(err, "failed to install Tekton")
 	}
+
+	setValues = append(setValues,
+		"buildnum.enabled=false",
+		"build.enabled=false",
+		"pipelinerunner.enabled=true",
+	)
 
 	if useExternalDNS && strings.Contains(o.Domain, "nip.io") {
 		log.Logger().Warnf("Skipping install of External DNS, %s domain is not supported while using External DNS", util.ColorInfo(o.Domain))

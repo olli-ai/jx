@@ -1,4 +1,6 @@
-package create
+// +build unit
+
+package verify_test
 
 import (
 	"io/ioutil"
@@ -8,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/jenkins-x/jx/pkg/cmd/opts/step"
+	"github.com/jenkins-x/jx/pkg/cmd/step/verify"
 	resources_test "github.com/jenkins-x/jx/pkg/kube/resources/mocks"
 
 	"github.com/jenkins-x/jx/pkg/config"
@@ -25,17 +28,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func TestCreateInstallValues(t *testing.T) {
-	testData := path.Join("test_data", "step_create_install_values")
+func TestVerifyIngress(t *testing.T) {
+	testData := path.Join("test_data", "verify_ingress")
 	assert.DirExists(t, testData)
 
-	outputDir, err := ioutil.TempDir("", "test-step-create-install-values-")
+	outputDir, err := ioutil.TempDir("", "test-step-verify-ingress-")
 	require.NoError(t, err)
 
 	err = util.CopyDir(testData, outputDir, true)
 	require.NoError(t, err, "failed to copy test data into temp dir")
 
-	o := &StepCreateInstallValuesOptions{
+	o := &verify.StepVerifyIngressOptions{
 		StepOptions: step.StepOptions{
 			CommonOptions: &opts.CommonOptions{
 				In:  os.Stdin,
@@ -91,7 +94,7 @@ func TestExternalDNSDisabledDomainNotOwned(t *testing.T) {
 	commonOpts := opts.CommonOptions{
 		BatchMode: false,
 	}
-	o := StepCreateInstallValuesOptions{
+	o := verify.StepVerifyIngressOptions{
 		StepOptions: step.StepOptions{
 			CommonOptions: &commonOpts,
 		},
@@ -102,7 +105,7 @@ func TestExternalDNSDisabledDomainNotOwned(t *testing.T) {
 
 	o.Dir = dir
 	file := filepath.Join(o.Dir, config.RequirementsConfigFileName)
-	requirements := getBaseRequirements()
+	requirements := getRequirements()
 
 	// using nip.io on gke should disable the use of external dns as we cannot transfer domain ownership to google dns
 	requirements.Ingress.Domain = "34.76.24.247.nip.io"
@@ -132,7 +135,7 @@ func TestExternalDNSDisabledNotGKE(t *testing.T) {
 	commonOpts := opts.CommonOptions{
 		BatchMode: false,
 	}
-	o := StepCreateInstallValuesOptions{
+	o := verify.StepVerifyIngressOptions{
 		StepOptions: step.StepOptions{
 			CommonOptions: &commonOpts,
 		},
@@ -143,7 +146,7 @@ func TestExternalDNSDisabledNotGKE(t *testing.T) {
 
 	o.Dir = dir
 	file := filepath.Join(o.Dir, config.RequirementsConfigFileName)
-	requirements := getBaseRequirements()
+	requirements := getRequirements()
 
 	// using nip.io on gke should disable the use of external dns as we cannot transfer domain ownership to google dns
 	requirements.Ingress.Domain = "foobar.com"
@@ -167,7 +170,7 @@ func TestExternalDNSDisabledNotGKE(t *testing.T) {
 
 }
 
-func getBaseRequirements() *config.RequirementsConfig {
+func getRequirements() *config.RequirementsConfig {
 	requirements := config.NewRequirementsConfig()
 	requirements.Cluster.ProjectID = "test-project"
 	requirements.Cluster.ClusterName = "test-cluster"

@@ -1,3 +1,5 @@
+// +build unit
+
 package scheduler_test
 
 import (
@@ -98,11 +100,12 @@ func TestStepSchedulerConfigApplyGitopsAll(t *testing.T) {
 		err := testhelpers.CleanupTestKubeConfigDir(originalKubeCfg, tempKubeCfg)
 		assert.NoError(t, err)
 	}()
-	err = testOptions.StepSchedulerConfigApplyOptions.Run()
-	assert.NoError(t, err)
 	envDir, err := testOptions.StepSchedulerConfigApplyOptions.CommonOptions.EnvironmentsDir()
 	assert.NoError(t, err)
 	devEnvDir := filepath.Join(envDir, testOptions.DevEnvName)
+	testOptions.StepSchedulerConfigApplyOptions.CloneDir = devEnvDir
+	err = testOptions.StepSchedulerConfigApplyOptions.Run()
+	assert.NoError(t, err)
 	verifyProwGitopsConfig(err, testOptions, devEnvDir, t)
 }
 
@@ -123,11 +126,12 @@ func TestStepSchedulerConfigApplyGitopsDefaultScheduler(t *testing.T) {
 		err := testhelpers.CleanupTestKubeConfigDir(originalKubeCfg, tempKubeCfg)
 		assert.NoError(t, err)
 	}()
-	err = testOptions.StepSchedulerConfigApplyOptions.Run()
-	assert.NoError(t, err)
 	envDir, err := testOptions.StepSchedulerConfigApplyOptions.CommonOptions.EnvironmentsDir()
 	assert.NoError(t, err)
 	devEnvDir := filepath.Join(envDir, testOptions.DevEnvName)
+	testOptions.StepSchedulerConfigApplyOptions.CloneDir = devEnvDir
+	err = testOptions.StepSchedulerConfigApplyOptions.Run()
+	assert.NoError(t, err)
 	verifyProwGitopsConfig(err, testOptions, devEnvDir, t)
 }
 
@@ -148,11 +152,12 @@ func TestStepSchedulerConfigApplyGitopsRepoScheduler(t *testing.T) {
 		err := testhelpers.CleanupTestKubeConfigDir(originalKubeCfg, tempKubeCfg)
 		assert.NoError(t, err)
 	}()
-	err = testOptions.StepSchedulerConfigApplyOptions.Run()
-	assert.NoError(t, err)
 	envDir, err := testOptions.StepSchedulerConfigApplyOptions.CommonOptions.EnvironmentsDir()
 	assert.NoError(t, err)
 	devEnvDir := filepath.Join(envDir, testOptions.DevEnvName)
+	testOptions.StepSchedulerConfigApplyOptions.CloneDir = devEnvDir
+	err = testOptions.StepSchedulerConfigApplyOptions.Run()
+	assert.NoError(t, err)
 	verifyProwGitopsConfig(err, testOptions, devEnvDir, t)
 }
 
@@ -173,11 +178,12 @@ func TestStepSchedulerConfigApplyGitopsRepoGroupScheduler(t *testing.T) {
 		err := testhelpers.CleanupTestKubeConfigDir(originalKubeCfg, tempKubeCfg)
 		assert.NoError(t, err)
 	}()
-	err = testOptions.StepSchedulerConfigApplyOptions.Run()
-	assert.NoError(t, err)
 	envDir, err := testOptions.StepSchedulerConfigApplyOptions.CommonOptions.EnvironmentsDir()
 	assert.NoError(t, err)
 	devEnvDir := filepath.Join(envDir, testOptions.DevEnvName)
+	testOptions.StepSchedulerConfigApplyOptions.CloneDir = devEnvDir
+	err = testOptions.StepSchedulerConfigApplyOptions.Run()
+	assert.NoError(t, err)
 	verifyProwGitopsConfig(err, testOptions, devEnvDir, t)
 }
 

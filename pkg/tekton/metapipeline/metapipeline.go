@@ -35,6 +35,9 @@ const (
 	createTektonCRDsStepName = "create-tekton-crds"
 
 	tektonBaseDir = "/workspace"
+
+	mavenSettingsSecretName = "jenkins-maven-settings" // #nosec
+	mavenSettingsMount      = "/root/.m2/"
 )
 
 // CRDCreationParameters are the parameters needed to create the Tekton CRDs
@@ -42,7 +45,6 @@ type CRDCreationParameters struct {
 	Namespace           string
 	Context             string
 	PipelineName        string
-	ResourceName        string
 	PipelineKind        PipelineKind
 	BuildNumber         string
 	GitInfo             gits.GitRepository
@@ -57,6 +59,7 @@ type CRDCreationParameters struct {
 	Apps                []jenkinsv1.App
 	VersionsDir         string
 	UseBranchAsRevision bool
+	NoReleasePrepare    bool
 }
 
 // createMetaPipelineCRDs creates the Tekton CRDs needed to execute the meta pipeline.
@@ -78,7 +81,6 @@ func createMetaPipelineCRDs(params CRDCreationParameters) (*tekton.CRDWrapper, e
 	crdParams := syntax.CRDsFromPipelineParams{
 		PipelineIdentifier: params.PipelineName,
 		BuildIdentifier:    params.BuildNumber,
-		ResourceIdentifier: params.ResourceName,
 		Namespace:          params.Namespace,
 		PodTemplates:       params.PodTemplates,
 		VersionsDir:        params.VersionsDir,
@@ -96,7 +98,7 @@ func createMetaPipelineCRDs(params CRDCreationParameters) (*tekton.CRDWrapper, e
 	if revision == "" {
 		revision = params.PullRef.BaseBranch()
 	}
-	resources := []*pipelineapi.PipelineResource{tekton.GenerateSourceRepoResource(params.ResourceName, &params.GitInfo, revision)}
+	resources := []*pipelineapi.PipelineResource{tekton.GenerateSourceRepoResource(params.PipelineName, &params.GitInfo, revision)}
 	run := tekton.CreatePipelineRun(resources, pipeline.Name, pipeline.APIVersion, labels, params.ServiceAccount, nil, nil, nil, nil)
 
 	tektonCRDs, err := tekton.NewCRDWrapper(pipeline, tasks, resources, structure, run)
@@ -134,6 +136,14 @@ func createPipeline(params CRDCreationParameters) (*syntax.ParsedPipeline, error
 		},
 		Options: &syntax.StageOptions{
 			RootOptions: &syntax.RootOptions{
+				Volumes: []*corev1.Volume{{
+					Name: mavenSettingsSecretName,
+					VolumeSource: corev1.VolumeSource{
+						Secret: &corev1.SecretVolumeSource{
+							SecretName: mavenSettingsSecretName,
+						},
+					},
+				}},
 				ContainerOptions: &corev1.Container{
 					Resources: corev1.ResourceRequirements{
 						Limits: corev1.ResourceList{
@@ -145,6 +155,10 @@ func createPipeline(params CRDCreationParameters) (*syntax.ParsedPipeline, error
 							"memory": resource.MustParse("256Mi"),
 						},
 					},
+					VolumeMounts: []corev1.VolumeMount{{
+						Name:      mavenSettingsSecretName,
+						MountPath: mavenSettingsMount,
+					}},
 				},
 			},
 		},
@@ -261,6 +275,9 @@ func stepCreateTektonCRDs(params CRDCreationParameters) syntax.Step {
 	}
 	if params.UseBranchAsRevision {
 		args = append(args, "--branch-as-revision")
+	}
+	if params.NoReleasePrepare {
+		args = append(args, "--no-release-prepare")
 	}
 	for k, v := range params.Labels {
 		args = append(args, "--label", fmt.Sprintf("%s=%s", k, v))

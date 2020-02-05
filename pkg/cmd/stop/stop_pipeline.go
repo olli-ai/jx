@@ -155,7 +155,8 @@ func (o *StopPipelineOptions) cancelPipelineRun() error {
 	if err != nil {
 		return errors.Wrap(err, "could not create tekton client")
 	}
-	prList, err := tektonClient.TektonV1alpha1().PipelineRuns(ns).List(metav1.ListOptions{})
+	pipelines := tektonClient.TektonV1alpha1().PipelineRuns(ns)
+	prList, err := pipelines.List(metav1.ListOptions{})
 	if err != nil {
 		return errors.Wrapf(err, "failed to list PipelineRuns in namespace %s", ns)
 	}
@@ -211,8 +212,8 @@ func (o *StopPipelineOptions) cancelPipelineRun() error {
 			return err
 		}
 
-		if !util.Confirm(fmt.Sprintf("cancel pipeline %s", name), true, "you can always restart a cancelled pipeline with 'jx start pipeline'", o.GetIOFileHandles()) {
-			return nil
+		if answer, err := util.Confirm(fmt.Sprintf("cancel pipeline %s", name), true, "you can always restart a cancelled pipeline with 'jx start pipeline'", o.GetIOFileHandles()); !answer {
+			return err
 		}
 		args = []string{name}
 	}
@@ -220,6 +221,14 @@ func (o *StopPipelineOptions) cancelPipelineRun() error {
 		pr := m[a]
 		if pr == nil {
 			return fmt.Errorf("no PipelineRun found for name %s", a)
+		}
+		pr, err = pipelines.Get(pr.Name, metav1.GetOptions{})
+		if err != nil {
+			return errors.Wrapf(err, "getting PipelineRun %s", pr.Name)
+		}
+		if tekton.PipelineRunIsComplete(pr) {
+			log.Logger().Infof("PipelineRun %s has already completed", util.ColorInfo(pr.Name))
+			continue
 		}
 		err = tekton.CancelPipelineRun(tektonClient, ns, pr)
 		if err != nil {

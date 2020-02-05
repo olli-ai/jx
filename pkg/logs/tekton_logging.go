@@ -15,6 +15,7 @@ import (
 
 	"github.com/jenkins-x/jx/pkg/cloud/buckets"
 	"github.com/jenkins-x/jx/pkg/config"
+	"github.com/jenkins-x/jx/pkg/kube/naming"
 
 	"github.com/fatih/color"
 	"github.com/google/uuid"
@@ -28,13 +29,13 @@ import (
 	"github.com/jenkins-x/jx/pkg/log"
 	"github.com/jenkins-x/jx/pkg/tekton"
 	"github.com/jenkins-x/jx/pkg/util"
-	knativeapis "github.com/knative/pkg/apis"
 	"github.com/pkg/errors"
 	tektonapis "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	tektonclient "github.com/tektoncd/pipeline/pkg/client/clientset/versioned"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	knativeapis "knative.dev/pkg/apis"
 )
 
 // TektonLogger contains the necessary clients and the namespace to get data from the cluster, an implementation of
@@ -150,11 +151,15 @@ func createPipelineActivityName(labels map[string]string, buildNumber string) st
 	if repository == "" {
 		repository = labels["repo"]
 	}
-	baseName := strings.ToLower(fmt.Sprintf("%s/%s/%s #%s", labels[v1.LabelOwner], repository, labels[v1.LabelBranch], buildNumber))
+	baseName := fmt.Sprintf("%s/%s/%s #%s",
+		naming.ToValidName(labels[v1.LabelOwner]),
+		naming.ToValidName(repository),
+		naming.ToValidName(labels[v1.LabelBranch]),
+		strings.ToLower(buildNumber))
 
 	context := labels[v1.LabelContext]
 	if context != "" {
-		return strings.ToLower(fmt.Sprintf("%s %s", baseName, context))
+		return fmt.Sprintf("%s %s", baseName, naming.ToValidName(context))
 	}
 
 	return baseName
@@ -163,8 +168,8 @@ func createPipelineActivityName(labels map[string]string, buildNumber string) st
 func findLegacyPipelineRunBuildNumber(pipelineRun *tektonapis.PipelineRun) string {
 	var buildNumber string
 	for _, p := range pipelineRun.Spec.Params {
-		if p.Name == "build_id" {
-			buildNumber = p.Value
+		if p.Name == "build_id" && p.Value.Type == tektonapis.ParamTypeString {
+			buildNumber = p.Value.StringVal
 		}
 	}
 	return buildNumber
@@ -251,7 +256,7 @@ func (t TektonLogger) GetRunningBuildLogs(pa *v1.PipelineActivity, buildName str
 
 		// Assuming we have a run to log, go get its logs, looping until we've seen all stages for that run.
 		if runToLog != nil {
-			structure, err := t.JXClient.JenkinsV1().PipelineStructures(pa.Namespace).Get(runToLog.Name, metav1.GetOptions{})
+			structure, err := tekton.StructureForPipelineRun(t.JXClient, pa.Namespace, runToLog)
 			if err != nil {
 				return errors.Wrapf(err, "failed to get pipeline structure for %s in namespace %s", runToLog.Name, pa.Namespace)
 			}

@@ -1,19 +1,3 @@
-#
-# Copyright (C) Original Authors
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#         http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-
 # Make does not offer a recursive wildcard function, so here's one:
 rwildcard=$(wildcard $1$2) $(foreach d,$(wildcard $1*),$(call rwildcard,$d/,$2))
 
@@ -23,7 +7,6 @@ BUILD_TARGET = build
 MAIN_SRC_FILE=cmd/jx/jx.go
 GO := GO111MODULE=on go
 GO_NOMOD :=GO111MODULE=off go
-REV := $(shell git rev-parse --short HEAD 2> /dev/null || echo 'unknown')
 REV := $(shell git rev-parse --short HEAD 2> /dev/null || echo 'unknown')
 ORG := jenkins-x
 ORG_REPO := $(ORG)/$(NAME)
@@ -62,7 +45,7 @@ BUILDFLAGS :=  -ldflags \
 		$(BUILD_TIME_CONFIG_FLAGS)"
 
 # Some tests expect default values for version.*, so just use the config package values there.
-TEST_BUILDFLAGS :=  -ldflags " $(BUILD_TIME_CONFIG_FLAGS)"
+TEST_BUILDFLAGS :=  -ldflags "$(BUILD_TIME_CONFIG_FLAGS)"
 
 ifdef DEBUG
 BUILDFLAGS := -gcflags "all=-N -l" $(BUILDFLAGS)
@@ -78,18 +61,6 @@ endif
 
 ifdef DISABLE_TEST_CACHING
 GOTEST += -count=1
-endif
-
-# support for building a covered jx binary (one with the coverage instrumentation compiled in). The `build-covered`
-# target also builds the covered binary explicitly
-COVERED_MAIN_SRC_FILE=./cmd/jx
-COVERAGE_BUILDFLAGS = -c -tags covered_binary -coverpkg=./... -covermode=count
-COVERAGE_BUILD_TARGET = test
-ifdef COVERED_BINARY
-BUILDFLAGS += $(COVERAGE_BUILDFLAGS)
-BUILD_TARGET = $(COVERAGE_BUILD_TARGET)
-MAIN_SRC_FILE = $(COVERED_MAIN_SRC_FILE)
-
 endif
 
 TEST_PACKAGE ?= ./...
@@ -112,7 +83,6 @@ get-test-deps: ## Install test dependencies
 	$(GO_NOMOD) get github.com/axw/gocov/gocov
 	$(GO_NOMOD) get -u gopkg.in/matm/v1/gocov-html
 
-
 print-version: ## Print version
 	@echo $(VERSION)
 
@@ -121,10 +91,6 @@ build: $(GO_DEPENDENCIES) ## Build jx binary for current OS
 
 build-all: $(GO_DEPENDENCIES) build make-reports-dir ## Build all files - runtime, all tests etc.
 	CGO_ENABLED=$(CGO_ENABLED) $(GOTEST) -run=nope -tags=integration -failfast -short ./... $(BUILDFLAGS)
-
-.PHONY: build-covered
-build-covered: $(GO_DEPENDENCIES) ## Build jx binary for current OS with coverage instrumentation to build/$(NAME).covered
-	CGO_ENABLED=$(CGO_ENABLED) $(GO) $(COVERAGE_BUILD_TARGET) $(BUILDFLAGS) $(COVERAGE_BUILDFLAGS) -o build/$(NAME).covered $(COVERED_MAIN_SRC_FILE)
 
 tidy-deps: ## Cleans up dependencies
 	$(GO) mod tidy
@@ -135,31 +101,22 @@ tidy-deps: ## Cleans up dependencies
 make-reports-dir:
 	mkdir -p $(REPORTS_DIR)
 
-test: make-reports-dir ## Run ONLY the tests that have no build flags (and example of a build tag is the "integration" build tag)
-	CGO_ENABLED=$(CGO_ENABLED) $(GOTEST) $(COVERFLAGS) -failfast -short ./... $(TEST_BUILDFLAGS)
+test: ## Run tests with the "unit" build tag
+	KUBECONFIG=/cluster/connections/not/allowed CGO_ENABLED=$(CGO_ENABLED) $(GOTEST) --tags=unit -failfast -short ./... $(TEST_BUILDFLAGS)
 
-test-cloud-gke: make-reports-dir ## Run ONLY the tests that have no build flags (and example of a build tag is the "integration" build tag)
-	CGO_ENABLED=$(CGO_ENABLED) $(GOTEST) -coverprofile=$(COVER_OUT) --covermode=count --coverpkg=./pkg/cloud/gke -failfast -short ./pkg/cloud/gke $(TEST_BUILDFLAGS)
+test-coverage : make-reports-dir ## Run tests and coverage for all tests with the "unit" build tag
+	CGO_ENABLED=$(CGO_ENABLED) $(GOTEST) --tags=unit $(COVERFLAGS) -failfast -short ./... $(TEST_BUILDFLAGS)
 
-test-report: make-reports-dir get-test-deps test ## Create the test report
+test-report: make-reports-dir get-test-deps test-coverage ## Create the test report
 	@gocov convert $(COVER_OUT) | gocov report
 
-test-report-html: make-reports-dir get-test-deps test ## Create the test report in HTML format
+test-report-html: make-reports-dir get-test-deps test-coverage ## Create the test report in HTML format
 	@gocov convert $(COVER_OUT) | gocov-html > $(REPORTS_DIR)/cover.html && open $(REPORTS_DIR)/cover.html
 
 test-verbose: make-reports-dir ## Run the unit tests in verbose mode
-	CGO_ENABLED=$(CGO_ENABLED) $(GOTEST) -v $(COVERFLAGS) -failfast ./... $(TEST_BUILDFLAGS)
+	CGO_ENABLED=$(CGO_ENABLED) $(GOTEST) -v $(COVERFLAGS) --tags=unit -failfast ./... $(TEST_BUILDFLAGS)
 
-test-slow-report: get-test-deps test-slow make-reports-dir
-	@gocov convert $(COVER_OUT) | gocov report
-
-test-slow: make-reports-dir ## Run unit tests sequentially
-	@CGO_ENABLED=$(CGO_ENABLED) $(GOTEST) $(COVERFLAGS) ./... $(TEST_BUILDFLAGS)
-
-test-slow-report-html: make-reports-dir get-test-deps test-slow
-	@gocov convert $(COVER_OUT) | gocov-html > $(REPORTS_DIR)/cover.html && open $(REPORTS_DIR)/cover.html
-
-test-integration: get-test-deps## Run the integration tests
+test-integration: get-test-deps ## Run the integration tests
 	@CGO_ENABLED=$(CGO_ENABLED) $(GOTEST) -tags=integration  -short ./... $(TEST_BUILDFLAGS)
 
 test-integration1: make-reports-dir
@@ -186,32 +143,11 @@ test-slow-integration-report: make-reports-dir get-test-deps test-slow-integrati
 test-slow-integration-report-html: make-reports-dir get-test-deps test-slow-integration
 	@gocov convert $(COVER_OUT) | gocov-html > $(REPORTS_DIR)/cover.html && open $(REPORTS_DIR)/cover.html
 
-test-soak: make-reports-dir get-test-deps
-	@CGO_ENABLED=$(CGO_ENABLED) $(GOTEST) -tags soak $(COVERFLAGS) ./... $(TEST_BUILDFLAGS)
-
-test1: get-test-deps make-reports-dir ## Runs single test specified by test name, eg 'make test1 TEST=TestFoo'
-	CGO_ENABLED=$(CGO_ENABLED) $(GOTEST) ./... $(TEST_BUILDFLAGS) -test.v -run $(TEST)
-
-test1-pkg: get-test-deps make-reports-dir ## Runs single test specified by path to test file, eg 'make test-single-file PKG=./pkg/util TEST=TestFoo'
-	CGO_ENABLED=$(CGO_ENABLED) $(GOTEST) $(PKG) $(TEST_BUILDFLAGS) -test.v $(TEST)
+test1: get-test-deps make-reports-dir ## Runs single test specified by test name and optional package, eg 'make test1 TEST_PACKAGE=./pkg/gits TEST=TestGitCLI'
+	CGO_ENABLED=$(CGO_ENABLED) $(GOTEST) $(TEST_BUILDFLAGS) -tags="unit integration" $(TEST_PACKAGE) -run $(TEST)
 
 testbin: get-test-deps make-reports-dir
 	CGO_ENABLED=$(CGO_ENABLED) $(GOTEST) -c github.com/jenkins-x/jx/pkg/cmd -o build/jx-test $(TEST_BUILDFLAGS)
-
-testbin-gits: get-test-deps make-reports-dir
-	CGO_ENABLED=$(CGO_ENABLED) $(GOTEST) -c github.com/jenkins-x/jx/pkg/gits -o build/jx-test-gits $(TEST_BUILDFLAGS)
-
-debugtest1: testbin
-	cd pkg/jx/cmd && dlv --listen=:2345 --headless=true --api-version=2 exec ../../../build/jx-test -- $(TEST_BUILDFLAGS) -test.run $(TEST)
-
-debugtest1gits: testbin-gits
-	cd pkg/gits && dlv --log --listen=:2345 --headless=true --api-version=2 exec ../../build/jx-test-gits -- $(TEST_BUILDFLAGS) -test.run $(TEST)
-
-inttestbin: get-test-deps
-	CGO_ENABLED=$(CGO_ENABLED) $(GOTEST) -tags=integration -c github.com/jenkins-x/jx/pkg/cmd -o build/jx-inttest $(TEST_BUILDFLAGS)
-
-debuginttest1: inttestbin
-	cd pkg/jx/cmd && dlv --listen=:2345 --headless=true --api-version=2 exec ../../../build/jx-inttest -- $(TEST_BUILDFLAGS) -test.run $(TEST)
 
 install: $(GO_DEPENDENCIES) ## Install the binary
 	GOBIN=${GOPATH}/bin $(GO) install $(BUILDFLAGS) $(MAIN_SRC_FILE)
@@ -226,9 +162,6 @@ arm: ## Build for ARM
 
 win: ## Build for Windows
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=windows GOARCH=amd64 $(GO) $(BUILD_TARGET) $(BUILDFLAGS) -o build/win/$(NAME)-windows-amd64.exe $(MAIN_SRC_FILE)
-
-win32:
-	CGO_ENABLED=$(CGO_ENABLED) GOOS=windows GOARCH=386 $(GO) $(BUILD_TARGET) $(BUILDFLAGS) -o build/win32/$(NAME)-386.exe $(MAIN_SRC_FILE)
 
 darwin: ## Build for OSX
 	CGO_ENABLED=$(CGO_ENABLED) GOOS=darwin GOARCH=amd64 $(GO) $(BUILD_TARGET) $(BUILDFLAGS) -o build/darwin/$(NAME) $(MAIN_SRC_FILE)
@@ -273,7 +206,6 @@ fmt: importfmt ## Format the code
 
 .PHONY: importfmt
 importfmt: get-fmt-deps
-	# $(GO_NOMOD) get golang.org/x/tools/cmd/goimports
 	@echo "Formatting the imports..."
 	goimports -w $(GO_DEPENDENCIES)
 

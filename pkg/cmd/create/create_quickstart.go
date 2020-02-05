@@ -111,6 +111,11 @@ func (o *CreateQuickstartOptions) Run() error {
 	if err != nil {
 		return err
 	}
+	return o.CreateQuickStart(q)
+}
+
+// CreateQuickStart helper method to create a quickstart from a quickstart resource
+func (o *CreateQuickstartOptions) CreateQuickStart(q *quickstarts.QuickstartForm) error {
 	if q == nil {
 		return fmt.Errorf("no quickstart chosen")
 	}
@@ -120,6 +125,7 @@ func (o *CreateQuickstartOptions) Run() error {
 	o.GitRepositoryOptions.RepoName = o.ImportOptions.Repository
 	repoName := o.GitRepositoryOptions.RepoName
 	if !o.BatchMode {
+		var err error
 		details, err = o.GetGitRepositoryDetails()
 		if err != nil {
 			return err
@@ -140,6 +146,7 @@ func (o *CreateQuickstartOptions) Run() error {
 		if q.Name == "" {
 			return util.MissingOption("project-name")
 		}
+
 	}
 
 	githubAppMode, err := o.IsGitHubAppMode()
@@ -152,7 +159,13 @@ func (o *CreateQuickstartOptions) Run() error {
 			Factory: o.GetFactory(),
 		}
 
-		installed, err := githubApp.Install(details.Organisation, details.RepoName, o.GetIOFileHandles(), true)
+		owner := o.GitRepositoryOptions.Owner
+		repoName := o.GitRepositoryOptions.RepoName
+		if details != nil {
+			owner = details.Organisation
+			repoName = details.RepoName
+		}
+		installed, err := githubApp.Install(owner, repoName, o.GetIOFileHandles(), true)
 		if err != nil {
 			return err
 		}
@@ -194,8 +207,6 @@ func (o *CreateQuickstartOptions) Run() error {
 			o.PostDraftPackCallback = func() error {
 				_, appName := filepath.Split(genDir)
 				appChartDir := filepath.Join(genDir, "charts", appName)
-
-				log.Logger().Infof("### PostDraftPack callback copying from %s to %s!!!s", chartsDir, appChartDir)
 				err := util.CopyDirOverwrite(chartsDir, appChartDir)
 				if err != nil {
 					return err
@@ -206,11 +217,9 @@ func (o *CreateQuickstartOptions) Run() error {
 				}
 				return o.Git().Remove(genDir, filepath.Join("charts", folder))
 			}
-		} else {
-			log.Logger().Infof("### NO charts folder %s", chartsDir)
 		}
 	}
-	log.Logger().Infof("Created project at %s\n", util.ColorInfo(genDir))
+	o.GetReporter().CreatedProject(genDir)
 
 	o.CreateProjectOptions.ImportOptions.GitProvider = o.GitProvider
 
@@ -278,7 +287,7 @@ func (o *CreateQuickstartOptions) createQuickstart(f *quickstarts.QuickstartForm
 	if err != nil {
 		return answer, fmt.Errorf("failed to rename temp dir %s to %s: %s", tmpDir, answer, err)
 	}
-	log.Logger().Infof("Generated quickstart at %s", answer)
+	o.GetReporter().GeneratedQuickStartAt(answer)
 	return answer, nil
 }
 

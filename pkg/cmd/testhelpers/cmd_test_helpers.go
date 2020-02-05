@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pkg/errors"
+
 	//"github.com/jenkins-x/jx/pkg/cmd/controller"
 
 	"github.com/ghodss/yaml"
@@ -120,7 +122,7 @@ func SetFakeFactoryFromKubeClients(o *opts.CommonOptions) {
 	apiClient, _ := o.ApiExtensionsClient()
 	jxClient, _, _ := o.JXClient()
 	kubeClient, _ := o.KubeClient()
-	f := fakefactory.NewFakeFactoryFromClients(apiClient, jxClient, kubeClient)
+	f := fakefactory.NewFakeFactoryFromClients(apiClient, jxClient, kubeClient, nil, nil)
 	f.SetDelegateFactory(o.GetFactory())
 	o.SetFactory(f)
 }
@@ -144,42 +146,25 @@ func MockFactoryFakeClients(mockFactory *clients_test.MockFactory) {
 	pegomock.When(mockFactory.CreateKnativeServeClient()).ThenReturn(pegomock.ReturnValue(kservefake.NewSimpleClientset()), pegomock.ReturnValue("jx"), pegomock.ReturnValue(nil))
 }
 
-// CreateTestJxHomeDir creates a temporary JX_HOME directory for the tests, copying over any existing config, returning
+// CreateTestJxHomeDir creates a temporary JX_HOME directory for the tests, returning
 // the original JX_HOME directory, the temporary JX_HOME value, and any error.
 func CreateTestJxHomeDir() (string, string, error) {
 	originalDir, err := util.ConfigDir()
 	if err != nil {
-		return "", "", err
+		return "", "", errors.Wrap(err, "Unable to get JX home configuration directory")
 	}
-	exists, err := util.FileExists(path.Join(originalDir, "gitAuth.yaml"))
+	newDir, err := ioutil.TempDir("", ".jx")
 	if err != nil {
-		return "", "", err
+		return "", "", errors.Wrap(err, "Unable to create a temporary JX home configuration directory")
 	}
-	if exists {
-		newDir, err := ioutil.TempDir("", ".jx")
-		if err != nil {
-			return "", "", err
-		}
-		contents, err := ioutil.ReadDir(originalDir)
-		if err != nil {
-			return "", "", err
-		}
-		for _, f := range contents {
-			if strings.HasSuffix(f.Name(), ".yaml") {
-				err = util.CopyFileOrDir(path.Join(originalDir, f.Name()), path.Join(newDir, f.Name()), true)
-				if err != nil {
-					return "", "", err
-				}
-			}
-		}
-		err = os.Setenv("JX_HOME", newDir)
-		if err != nil {
-			os.Unsetenv("JX_HOME")
-			return "", "", err
-		}
-		return originalDir, newDir, nil
+
+	originalDir = os.Getenv("JX_HOME")
+	err = os.Setenv("JX_HOME", newDir)
+	if err != nil {
+		err := os.Setenv("JX_HOME", originalDir)
+		return "", "", errors.Wrap(err, "Unable to set JX home directory variable ")
 	}
-	return "", "", nil
+	return originalDir, newDir, nil
 }
 
 // CleanupTestJxHomeDir should be called in a deferred function whenever CreateTestJxHomeDir is called

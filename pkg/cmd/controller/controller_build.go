@@ -9,10 +9,11 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/jenkins-x/jx/pkg/cmd/step/git/credentials"
+
 	"github.com/ghodss/yaml"
 	"github.com/jenkins-x/jx/pkg/cmd/helper"
 	"github.com/jenkins-x/jx/pkg/cmd/opts"
-	"github.com/jenkins-x/jx/pkg/cmd/step/git"
 	"github.com/jenkins-x/jx/pkg/gits"
 	"github.com/jenkins-x/jx/pkg/logs"
 	"k8s.io/apimachinery/pkg/fields"
@@ -158,11 +159,6 @@ func (o *ControllerBuildOptions) Run() error {
 		return err
 	}
 
-	tektonEnabled, err := kube.IsTektonEnabled(kubeClient, devNs)
-	if err != nil {
-		return err
-	}
-
 	if !o.GitReporting {
 		if strings.ToLower(os.Getenv("GIT_REPORTING")) == "true" {
 			o.GitReporting = true
@@ -198,67 +194,31 @@ func (o *ControllerBuildOptions) Run() error {
 		log.Logger().Warnf("failed to label the legacy PipelineActivity resources: %s", err)
 	}
 
-	if tektonEnabled {
-		pod := &corev1.Pod{}
-		log.Logger().Infof("Watching for Pods in namespace %s", util.ColorInfo(ns))
-		listWatch := cache.NewListWatchFromClient(kubeClient.CoreV1().RESTClient(), "pods", ns, fields.Everything())
-		kube.SortListWatchByName(listWatch)
-		_, controller := cache.NewInformer(
-			listWatch,
-			pod,
-			time.Minute*10,
-			cache.ResourceEventHandlerFuncs{
-				AddFunc: func(obj interface{}) {
-					o.onPipelinePod(obj, kubeClient, jxClient, tektonClient, ns)
-				},
-				UpdateFunc: func(oldObj, newObj interface{}) {
-					o.onPipelinePod(newObj, kubeClient, jxClient, tektonClient, ns)
-				},
-				DeleteFunc: func(obj interface{}) {
-				},
+	pod := &corev1.Pod{}
+	log.Logger().Infof("Watching for Pods in namespace %s", util.ColorInfo(ns))
+	listWatch := cache.NewListWatchFromClient(kubeClient.CoreV1().RESTClient(), "pods", ns, fields.Everything())
+	kube.SortListWatchByName(listWatch)
+	_, controller := cache.NewInformer(
+		listWatch,
+		pod,
+		time.Minute*10,
+		cache.ResourceEventHandlerFuncs{
+			AddFunc: func(obj interface{}) {
+				o.onPipelinePod(obj, kubeClient, jxClient, tektonClient, ns)
 			},
-		)
-
-		stop := make(chan struct{})
-		go controller.Run(stop)
-	} else {
-		pod := &corev1.Pod{}
-		log.Logger().Infof("Watching for Knative build pods in namespace %s", util.ColorInfo(ns))
-		listWatch := cache.NewListWatchFromClient(kubeClient.CoreV1().RESTClient(), "pods", ns, fields.Everything())
-		kube.SortListWatchByName(listWatch)
-		_, controller := cache.NewInformer(
-			listWatch,
-			pod,
-			time.Minute*10,
-			cache.ResourceEventHandlerFuncs{
-				AddFunc: func(obj interface{}) {
-					o.onPod(obj, kubeClient, jxClient, ns)
-				},
-				UpdateFunc: func(oldObj, newObj interface{}) {
-					o.onPod(newObj, kubeClient, jxClient, ns)
-				},
-				DeleteFunc: func(obj interface{}) {
-				},
+			UpdateFunc: func(oldObj, newObj interface{}) {
+				o.onPipelinePod(newObj, kubeClient, jxClient, tektonClient, ns)
 			},
-		)
+			DeleteFunc: func(obj interface{}) {
+			},
+		},
+	)
 
-		stop := make(chan struct{})
-		go controller.Run(stop)
-	}
+	stop := make(chan struct{})
+	go controller.Run(stop)
 
 	// Wait forever
 	select {}
-}
-
-func (o *ControllerBuildOptions) onPod(obj interface{}, kubeClient kubernetes.Interface, jxClient versioned.Interface, ns string) {
-	pod, ok := obj.(*corev1.Pod)
-	if !ok {
-		log.Logger().Infof("Object is not a Pod %#v", obj)
-		return
-	}
-	if pod != nil {
-		o.handleStandalonePod(pod, kubeClient, jxClient, ns)
-	}
 }
 
 func (o *ControllerBuildOptions) handleStandalonePod(pod *corev1.Pod, kubeClient kubernetes.Interface, jxClient versioned.Interface, ns string) {
@@ -331,7 +291,8 @@ func (o *ControllerBuildOptions) onPipelinePod(obj interface{}, kubeClient kuber
 					log.Logger().Warnf("Error getting PodList for PipelineRun %s: %s", prName, err)
 					return
 				}
-				structure, err := jxClient.JenkinsV1().PipelineStructures(ns).Get(prName, metav1.GetOptions{})
+
+				structure, err := tekton.StructureForPipelineRun(jxClient, ns, pr)
 				if err != nil {
 					log.Logger().Warnf("Error getting PipelineStructure for PipelineRun %s: %s", prName, err)
 					return
@@ -384,7 +345,7 @@ func (o *ControllerBuildOptions) onPipelinePod(obj interface{}, kubeClient kuber
 	}
 }
 
-// createPromoteStepActivityKey deduces the pipeline metadata from the Knative build pod
+// createPromoteStepActivityKey deduces the pipeline metadata from the build pod
 func (o *ControllerBuildOptions) createPromoteStepActivityKey(buildName string, pod *corev1.Pod) *kube.PromoteStepActivityKey {
 
 	buildInfo := builds.CreateBuildPodInfo(pod)
@@ -1106,7 +1067,7 @@ func (o *ControllerBuildOptions) generateBuildLogURL(podInterface typedcorev1.Po
 	}
 
 	if initGitCredentials {
-		gc := &git.StepGitCredentialsOptions{}
+		gc := &credentials.StepGitCredentialsOptions{}
 		copy := *o.CommonOptions
 		gc.CommonOptions = &copy
 		gc.BatchMode = true

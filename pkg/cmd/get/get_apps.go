@@ -118,14 +118,14 @@ func (o *GetAppsOptions) Run() error {
 		return errors.Wrap(err, "getting the the GitOps environments dir")
 	}
 	installOptions := apps.InstallOptions{
-		IOFileHandles:   o.GetIOFileHandles(),
-		DevEnv:          o.DevEnv,
-		Verbose:         o.Verbose,
-		GitOps:          o.GitOps,
-		BatchMode:       o.BatchMode,
-		Helmer:          o.Helm(),
-		JxClient:        jxClient,
-		EnvironmentsDir: envsDir,
+		IOFileHandles:       o.GetIOFileHandles(),
+		DevEnv:              o.DevEnv,
+		Verbose:             o.Verbose,
+		GitOps:              o.GitOps,
+		BatchMode:           o.BatchMode,
+		Helmer:              o.Helm(),
+		JxClient:            jxClient,
+		EnvironmentCloneDir: envsDir,
 	}
 
 	if o.GetSecretsLocation() == secrets.VaultLocationKind {
@@ -150,10 +150,8 @@ func (o *GetAppsOptions) Run() error {
 		if err != nil {
 			return errors.Wrapf(err, "creating git provider for %s", o.DevEnv.Spec.Source.URL)
 		}
-		environmentsDir := envsDir
 		installOptions.GitProvider = gitProvider
 		installOptions.Gitter = o.Git()
-		installOptions.EnvironmentsDir = environmentsDir
 	}
 
 	apps, err := installOptions.GetApps(o.Args)

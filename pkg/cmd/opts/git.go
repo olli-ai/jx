@@ -145,9 +145,19 @@ func (o *CommonOptions) DiscoverGitURL(gitConf string) (string, error) {
 	return url, nil
 }
 
-// AddGitRepoOptionsArguments adds common git flags to the given cobra command
+// AddGitRepoOptionsArgumentsWithGithubDefault adds common git flags with a default provider URL of github.com to the given cobra command
+func AddGitRepoOptionsArgumentsWithGithubDefault(cmd *cobra.Command, repositoryOptions *gits.GitRepositoryOptions) {
+	AddGitRepoOptionsArgumentsWithDefaultProviderURL(cmd, repositoryOptions, "https://github.com")
+}
+
+// AddGitRepoOptionsArguments adds common git flags with no default provider URL to the given cobra command
 func AddGitRepoOptionsArguments(cmd *cobra.Command, repositoryOptions *gits.GitRepositoryOptions) {
-	cmd.Flags().StringVarP(&repositoryOptions.ServerURL, "git-provider-url", "", "https://github.com", "The Git server URL to create new Git repositories inside")
+	AddGitRepoOptionsArgumentsWithDefaultProviderURL(cmd, repositoryOptions, "")
+}
+
+// AddGitRepoOptionsArgumentsWithDefaultProviderURL adds common git flags with the given default provider URL to the given cobra command
+func AddGitRepoOptionsArgumentsWithDefaultProviderURL(cmd *cobra.Command, repositoryOptions *gits.GitRepositoryOptions, defaultProviderURL string) {
+	cmd.Flags().StringVarP(&repositoryOptions.ServerURL, "git-provider-url", "", defaultProviderURL, "The Git server URL to create new Git repositories inside")
 	cmd.Flags().StringVarP(&repositoryOptions.ServerKind, "git-provider-kind", "", "",
 		"Kind of Git server. If not specified, kind of server will be autodetected from Git provider URL. Possible values: bitbucketcloud, bitbucketserver, gitea, gitlab, github, fakegit")
 	cmd.Flags().StringVarP(&repositoryOptions.Username, "git-username", "", "", "The Git username to use for creating new Git repositories")
@@ -172,7 +182,19 @@ func (o *CommonOptions) GitServerHostURLKind(hostURL string) (string, error) {
 		return "", err
 	}
 
-	kind, err := kube.GetGitServiceKind(jxClient, kubeClient, devNs, hostURL)
+	var clusterAuthConfig *auth.AuthConfig
+
+	// Pass the in-cluster git auth config to GetGitServiceKind
+	clusterAuthConfigSvc, err := o.GitAuthConfigService()
+	if err != nil {
+		return "", errors.Wrapf(err, "getting cluster-based auth configmap for checking kind of git url %s", hostURL)
+	}
+	if clusterAuthConfigSvc != nil {
+		clusterAuthConfig = clusterAuthConfigSvc.Config()
+	}
+
+	kind, err := kube.GetGitServiceKind(jxClient, kubeClient, devNs, clusterAuthConfig, hostURL)
+
 	if err != nil {
 		return kind, err
 	}
@@ -220,10 +242,30 @@ func (o *CommonOptions) GitProviderForGitServerURL(gitServiceURL string, gitKind
 	if o.fakeGitProvider != nil {
 		return o.fakeGitProvider, nil
 	}
-	authConfigSvc, err := o.GitAuthConfigServiceGitHubMode(ghOwner != "", gitKind)
-	if err != nil {
-		return nil, err
+
+	var err error
+	gha := ghOwner != ""
+	// if the github owner is empty then check if github app mode is enabled
+	if !gha {
+		gha, err = o.IsGitHubAppMode()
+		if err != nil {
+			return nil, errors.Wrap(err, "when trying to check if in GitHub App mode")
+		}
 	}
+
+	var authConfigSvc auth.ConfigService
+	if gha {
+		authConfigSvc, err = o.GitAuthConfigServiceGitHubAppMode(gitKind)
+		if err != nil {
+			return nil, errors.Wrap(err, "when creating auth config service using GitAuthConfigServiceGitHubAppMode")
+		}
+	} else {
+		authConfigSvc, err = o.GitAuthConfigService()
+		if err != nil {
+			return nil, errors.Wrap(err, "when creating auth config service using GitAuthConfigService")
+		}
+	}
+
 	return gits.CreateProviderForURL(cluster.IsInCluster(), authConfigSvc, gitKind, gitServiceURL, ghOwner, o.Git(), o.BatchMode, o.GetIOFileHandles())
 }
 

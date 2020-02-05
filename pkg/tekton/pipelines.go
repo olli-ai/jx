@@ -8,8 +8,10 @@ import (
 	"time"
 
 	jenkinsio "github.com/jenkins-x/jx/pkg/apis/jenkins.io"
-	v1 "github.com/jenkins-x/jx/pkg/client/clientset/versioned/typed/jenkins.io/v1"
+	v1 "github.com/jenkins-x/jx/pkg/apis/jenkins.io/v1"
+	clientv1 "github.com/jenkins-x/jx/pkg/client/clientset/versioned/typed/jenkins.io/v1"
 	"github.com/jenkins-x/jx/pkg/kube/naming"
+	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/rand"
 
@@ -120,7 +122,7 @@ func CreateOrUpdateTask(tektonClient tektonclient.Interface, ns string, created 
 	return answer, nil
 }
 
-func nextBuildNumberFromActivity(activityInterface v1.PipelineActivityInterface, gitInfo *gits.GitRepository, branch string) (string, error) {
+func nextBuildNumberFromActivity(activityInterface clientv1.PipelineActivityInterface, gitInfo *gits.GitRepository, branch string) (string, error) {
 	labelMap := labels.Set{
 		"owner":      gitInfo.Organisation,
 		"repository": gitInfo.Name,
@@ -262,7 +264,7 @@ func GenerateSourceRepoResource(name string, gitInfo *gits.GitRepository, revisi
 		},
 		Spec: pipelineapi.PipelineResourceSpec{
 			Type: pipelineapi.PipelineResourceTypeGit,
-			Params: []pipelineapi.Param{
+			Params: []pipelineapi.ResourceParam{
 				{
 					Name:  "revision",
 					Value: revision,
@@ -313,7 +315,7 @@ func CreatePipelineRun(resources []*pipelineapi.PipelineResource,
 			Labels: util.MergeMaps(labels),
 		},
 		Spec: pipelineapi.PipelineRunSpec{
-			ServiceAccount: serviceAccount,
+			ServiceAccountName: serviceAccount,
 			PipelineRef: pipelineapi.PipelineRef{
 				Name:       name,
 				APIVersion: apiVersion,
@@ -321,9 +323,11 @@ func CreatePipelineRun(resources []*pipelineapi.PipelineResource,
 			Resources: resourceBindings,
 			Params:    pipelineParams,
 			// TODO: We shouldn't have to set a default timeout in the first place. See https://github.com/tektoncd/pipeline/issues/978
-			Timeout:     timeout,
-			Affinity:    affinity,
-			Tolerations: tolerations,
+			Timeout: timeout,
+			PodTemplate: pipelineapi.PodTemplate{
+				Affinity:    affinity,
+				Tolerations: tolerations,
+			},
 		},
 	}
 
@@ -369,12 +373,17 @@ func CreateOrUpdatePipeline(tektonClient tektonclient.Interface, ns string, crea
 }
 
 // PipelineResourceNameFromGitInfo returns the pipeline resource name for the given git repository, branch and context
-func PipelineResourceNameFromGitInfo(gitInfo *gits.GitRepository, branch string, context string, pipelineType string, forceUnique bool) string {
-	return PipelineResourceName(gitInfo.Organisation, gitInfo.Name, branch, context, pipelineType, forceUnique)
+func PipelineResourceNameFromGitInfo(gitInfo *gits.GitRepository, branch string, context string, pipelineType string) string {
+	return PipelineResourceName(gitInfo.Organisation, gitInfo.Name, branch, context, pipelineType)
 }
 
-// PipelineResourceName returns the pipeline resource name for the given git org, repo name, branch and context
-func PipelineResourceName(organisation string, name string, branch string, context string, pipelineType string, forceUnique bool) string {
+// PipelineResourceName returns the pipeline resource name for the given git org, repo name, branch and context. It will always be unique.
+func PipelineResourceName(organisation string, name string, branch string, context string, pipelineType string) string {
+	return possiblyUniquePipelineResourceName(organisation, name, branch, context, pipelineType, true)
+}
+
+// possiblyUniquePipelineResourceName returns the pipeline resource name for the given git org, repo name, branch and context, possibly forcing it to be unique
+func possiblyUniquePipelineResourceName(organisation string, name string, branch string, context string, pipelineType string, forceUnique bool) string {
 	dirtyName := organisation + "-" + name + "-" + branch
 	if context != "" {
 		dirtyName += "-" + context
@@ -414,6 +423,9 @@ func ApplyPipeline(jxClient versioned.Interface, tektonClient tektonclient.Inter
 	}
 
 	for _, resource := range crds.Resources() {
+		if activityOwnerReference != nil {
+			resource.OwnerReferences = []metav1.OwnerReference{*activityOwnerReference}
+		}
 		_, err := CreateOrUpdateSourceResource(tektonClient, ns, resource)
 		if err != nil {
 			return errors.Wrapf(err, "failed to create/update PipelineResource %s in namespace %s", resource.Name, ns)
@@ -481,6 +493,26 @@ func ApplyPipeline(jxClient versioned.Interface, tektonClient tektonclient.Inter
 	}
 
 	return nil
+}
+
+// StructureForPipelineRun finds the PipelineStructure for the given PipelineRun, trying its name first and then its
+// Pipeline name, returning an error if no PipelineStructure can be found.
+func StructureForPipelineRun(jxClient versioned.Interface, ns string, run *pipelineapi.PipelineRun) (*v1.PipelineStructure, error) {
+	// Use the Pipeline name for this run.
+	pipelineName := run.Labels[pipeline.GroupName+pipeline.PipelineLabelKey]
+	// Fall back on the PipelineRef.Name if there isn't a label.
+	if pipelineName == "" {
+		pipelineName = run.Spec.PipelineRef.Name
+	}
+	// If we still have no name, error out.
+	if pipelineName == "" {
+		return nil, fmt.Errorf("couldn't find a Pipeline name for PipelineRun %s", run.Name)
+	}
+	structure, err := jxClient.JenkinsV1().PipelineStructures(ns).Get(pipelineName, metav1.GetOptions{})
+	if err != nil {
+		return nil, errors.Wrapf(err, "getting PipelineStructure with Pipeline name %s for PipelineRun %s", pipelineName, run.Name)
+	}
+	return structure, nil
 }
 
 // PipelineRunIsNotPending returns true if the PipelineRun has completed or has running steps.

@@ -1,6 +1,8 @@
 package scheduler
 
 import (
+	"fmt"
+
 	"github.com/jenkins-x/jx/pkg/cmd/helper"
 	"github.com/jenkins-x/jx/pkg/cmd/opts"
 	"github.com/jenkins-x/jx/pkg/cmd/opts/step"
@@ -15,6 +17,9 @@ type StepSchedulerConfigApplyOptions struct {
 	step.StepOptions
 	Agent         string
 	ApplyDirectly bool
+
+	// Used for testing
+	CloneDir string
 }
 
 var (
@@ -59,13 +64,16 @@ func (o *StepSchedulerConfigApplyOptions) Run() error {
 	gitOps, devEnv := o.GetDevEnv()
 	switch o.Agent {
 	case "prow":
-		jxClient, ns, err := o.JXClient()
+		jxClient, ns, err := o.JXClientAndDevNamespace()
 		if err != nil {
 			return errors.WithStack(err)
 		}
 		teamSettings, err := o.TeamSettings()
 		if err != nil {
 			return err
+		}
+		if teamSettings == nil {
+			return fmt.Errorf("no TeamSettings for namespace %s", ns)
 		}
 		cfg, plugs, err := pipelinescheduler.GenerateProw(gitOps, true, jxClient, ns, teamSettings.DefaultScheduler.Name, devEnv, nil)
 		if err != nil {
@@ -81,11 +89,10 @@ func (o *StepSchedulerConfigApplyOptions) Run() error {
 				Verbose: o.Verbose,
 				DevEnv:  devEnv,
 			}
-			environmentsDir, err := o.EnvironmentsDir()
-			if err != nil {
-				return errors.Wrapf(err, "getting environments dir")
+			opts.PullRequestCloneDir = ""
+			if o.CloneDir != "" {
+				opts.PullRequestCloneDir = o.CloneDir
 			}
-			opts.EnvironmentsDir = environmentsDir
 
 			gitProvider, _, err := o.CreateGitProviderForURLWithoutKind(devEnv.Spec.Source.URL)
 			if err != nil {

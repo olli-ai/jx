@@ -302,9 +302,7 @@ func (o *StepCreateTaskOptions) Run() error {
 		return errors.Wrap(err, "Unable to load pod templates")
 	}
 
-	// resourceName is shared across all builds of a branch, while the pipelineName is unique for each build.
-	resourceName := tekton.PipelineResourceNameFromGitInfo(o.GitInfo, o.Branch, o.Context, tekton.BuildPipeline.String(), false)
-	pipelineName := tekton.PipelineResourceNameFromGitInfo(o.GitInfo, o.Branch, o.Context, tekton.BuildPipeline.String(), true)
+	pipelineName := tekton.PipelineResourceNameFromGitInfo(o.GitInfo, o.Branch, o.Context, tekton.BuildPipeline.String())
 
 	exists, err = o.effectiveProjectConfigExists()
 	if err != nil {
@@ -334,7 +332,7 @@ func (o *StepCreateTaskOptions) Run() error {
 	}
 
 	log.Logger().Debug("Creating Tekton CRDs")
-	tektonCRDs, err := o.generateTektonCRDs(effectiveProjectConfig, ns, pipelineName, resourceName)
+	tektonCRDs, err := o.generateTektonCRDs(effectiveProjectConfig, ns, pipelineName)
 	if err != nil {
 		return errors.Wrap(err, "failed to generate Tekton CRDs")
 	}
@@ -595,6 +593,7 @@ func (o *StepCreateTaskOptions) createEffectiveProjectConfig(packsDir string, pr
 		GitInfo:           o.GitInfo,
 		PodTemplates:      o.PodTemplates,
 		VersionResolver:   o.VersionResolver,
+		ValidateInCluster: !o.InterpretMode,
 	}
 	commonCopy := *o.CommonOptions
 	createEffective.CommonOptions = &commonCopy
@@ -627,7 +626,7 @@ func (o *StepCreateTaskOptions) createEffectiveProjectConfig(packsDir string, pr
 }
 
 // GenerateTektonCRDs creates the Pipeline, Task, PipelineResource, PipelineRun, and PipelineStructure CRDs that will be applied to actually kick off the pipeline
-func (o *StepCreateTaskOptions) generateTektonCRDs(effectiveProjectConfig *config.ProjectConfig, ns string, pipelineName string, resourceName string) (*tekton.CRDWrapper, error) {
+func (o *StepCreateTaskOptions) generateTektonCRDs(effectiveProjectConfig *config.ProjectConfig, ns string, pipelineName string) (*tekton.CRDWrapper, error) {
 	if effectiveProjectConfig == nil {
 		return nil, errors.New("effective project config cannot be nil")
 	}
@@ -640,7 +639,6 @@ func (o *StepCreateTaskOptions) generateTektonCRDs(effectiveProjectConfig *confi
 	crdParams := syntax.CRDsFromPipelineParams{
 		PipelineIdentifier: pipelineName,
 		BuildIdentifier:    o.BuildNumber,
-		ResourceIdentifier: resourceName,
 		Namespace:          ns,
 		PodTemplates:       o.PodTemplates,
 		VersionsDir:        o.VersionResolver.VersionsDir,
@@ -656,7 +654,7 @@ func (o *StepCreateTaskOptions) generateTektonCRDs(effectiveProjectConfig *confi
 	}
 
 	tasks, pipeline = o.enhanceTasksAndPipeline(tasks, pipeline, effectiveProjectConfig.PipelineConfig.Env)
-	resources := []*pipelineapi.PipelineResource{tekton.GenerateSourceRepoResource(resourceName, o.GitInfo, o.Revision)}
+	resources := []*pipelineapi.PipelineResource{tekton.GenerateSourceRepoResource(pipelineName, o.GitInfo, o.Revision)}
 
 	var timeout *metav1.Duration
 	if effectivePipeline.Options != nil && effectivePipeline.Options.Timeout != nil {
@@ -733,8 +731,8 @@ func (o *StepCreateTaskOptions) getDefaultTaskInputs() *pipelineapi.Inputs {
 func (o *StepCreateTaskOptions) enhanceTaskWithVolumesEnvAndInputs(task *pipelineapi.Task, env []corev1.EnvVar, inputs pipelineapi.Inputs) {
 	volumes := task.Spec.Volumes
 	for i, step := range task.Spec.Steps {
-		volumes = o.modifyVolumes(&step, volumes)
-		o.modifyEnvVars(&step, env)
+		volumes = o.modifyVolumes(&step.Container, volumes)
+		o.modifyEnvVars(&step.Container, env)
 		task.Spec.Steps[i] = step
 	}
 
@@ -791,10 +789,12 @@ func (o *StepCreateTaskOptions) createTaskParams() []pipelineapi.ParamSpec {
 			description = "the PipelineRun build number"
 			defaultValue = o.BuildNumber
 		}
+		stringParamDefaultValue := syntax.StringParamValue(defaultValue)
 		taskParams = append(taskParams, pipelineapi.ParamSpec{
 			Name:        name,
 			Description: description,
-			Default:     defaultValue,
+			Default:     &stringParamDefaultValue,
+			Type:        pipelineapi.ParamTypeString,
 		})
 	}
 	return taskParams
@@ -808,6 +808,7 @@ func (o *StepCreateTaskOptions) createPipelineParams() []pipelineapi.ParamSpec {
 			Name:        tp.Name,
 			Description: tp.Description,
 			Default:     tp.Default,
+			Type:        tp.Type,
 		})
 	}
 	return answer
@@ -818,7 +819,7 @@ func (o *StepCreateTaskOptions) createPipelineTaskParams() []pipelineapi.Param {
 	for _, p := range o.pipelineParams {
 		ptp = append(ptp, pipelineapi.Param{
 			Name:  p.Name,
-			Value: fmt.Sprintf("${params.%s}", p.Name),
+			Value: syntax.StringParamValue(fmt.Sprintf("$(params.%s)", p.Name)),
 		})
 	}
 	return ptp
@@ -995,7 +996,7 @@ func (o *StepCreateTaskOptions) modifyEnvVars(container *corev1.Container, globa
 		if kube.GetSliceEnvVar(envVars, name) == nil {
 			envVars = append(envVars, corev1.EnvVar{
 				Name:  name,
-				Value: "${inputs.params." + param.Name + "}",
+				Value: "$(inputs.params." + param.Name + ")",
 			})
 		}
 	}
@@ -1023,7 +1024,7 @@ func (o *StepCreateTaskOptions) modifyEnvVars(container *corev1.Container, globa
 	if kube.GetSliceEnvVar(envVars, "PREVIEW_VERSION") == nil && kube.GetSliceEnvVar(envVars, "VERSION") != nil {
 		envVars = append(envVars, corev1.EnvVar{
 			Name:  "PREVIEW_VERSION",
-			Value: "${inputs.params.version}",
+			Value: "$(inputs.params.version)",
 		})
 	}
 	for k, v := range o.AdditionalEnvVars {
@@ -1297,7 +1298,7 @@ func (o *StepCreateTaskOptions) setBuildVersion(pipelineConfig *jenkinsfile.Pipe
 		o.setRevisionForReleasePipeline(version)
 		o.pipelineParams = append(o.pipelineParams, pipelineapi.Param{
 			Name:  "version",
-			Value: o.version,
+			Value: syntax.StringParamValue(o.version),
 		})
 		log.Logger().Infof("Version used: '%s'", util.ColorInfo(version))
 
@@ -1348,7 +1349,7 @@ func (o *StepCreateTaskOptions) setBuildVersion(pipelineConfig *jenkinsfile.Pipe
 		if !hasParam(o.pipelineParams, "version") {
 			o.pipelineParams = append(o.pipelineParams, pipelineapi.Param{
 				Name:  "version",
-				Value: version,
+				Value: syntax.StringParamValue(version),
 			})
 		}
 	}
@@ -1357,7 +1358,7 @@ func (o *StepCreateTaskOptions) setBuildVersion(pipelineConfig *jenkinsfile.Pipe
 		if !hasParam(o.pipelineParams, "build_id") {
 			o.pipelineParams = append(o.pipelineParams, pipelineapi.Param{
 				Name:  "build_id",
-				Value: o.BuildNumber,
+				Value: syntax.StringParamValue(o.BuildNumber),
 			})
 		}
 	}
@@ -1478,7 +1479,9 @@ func (o *StepCreateTaskOptions) getClientsAndNamespace() (tektonclient.Interface
 func (o *StepCreateTaskOptions) interpretPipeline(ns string, projectConfig *config.ProjectConfig, crds *tekton.CRDWrapper) error {
 	steps := []corev1.Container{}
 	for _, task := range crds.Tasks() {
-		steps = append(steps, task.Spec.Steps...)
+		for _, s := range task.Spec.Steps {
+			steps = append(steps, s.Container)
+		}
 	}
 
 	if o.StartStep != "" {

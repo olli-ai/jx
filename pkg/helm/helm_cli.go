@@ -89,9 +89,17 @@ func (h *HelmCLI) checkCompatibility() {
 		log.Logger().Warnf("Unable to parse the current helm version: %s", version)
 		return
 	}
-	if v.Major > 2 {
-		log.Logger().Fatalf("Your current helm version v%d is not supported. Please downgrade to helm v2.", v.Major)
+
+	if os.Getenv("JX_HELM3") == "true" {
+		if v.Major != 3 {
+			log.Logger().Fatalf("You have set $JX_HELM3=true but your helm client version is %d", v.Major)
+		}
+	} else {
+		if v.Major > 2 {
+			log.Logger().Fatalf("Your current helm version v%d is not supported. Please downgrade to helm v2.", v.Major)
+		}
 	}
+
 }
 
 // SetHost is used to point at a locally running tiller
@@ -294,7 +302,7 @@ func (h *HelmCLI) BuildDependency() error {
 
 // InstallChart installs a helm chart according with the given flags
 func (h *HelmCLI) InstallChart(chart string, releaseName string, ns string, version string, timeout int,
-	values []string, valueFiles []string, repo string, username string, password string) error {
+	values []string, valueStrings []string, valueFiles []string, repo string, username string, password string) error {
 	var err error
 	currentNamespace := ""
 	if h.Binary == "helm3" {
@@ -329,6 +337,9 @@ func (h *HelmCLI) InstallChart(chart string, releaseName string, ns string, vers
 	}
 	for _, value := range values {
 		args = append(args, "--set", value)
+	}
+	for _, value := range valueStrings {
+		args = append(args, "--set-string", value)
 	}
 	for _, valueFile := range valueFiles {
 		args = append(args, "--values", valueFile)
@@ -406,13 +417,16 @@ func (h *HelmCLI) FetchChart(chart string, version string, untar bool, untardir 
 
 // Template generates the YAML from the chart template to the given directory
 func (h *HelmCLI) Template(chart string, releaseName string, ns string, outDir string, upgrade bool,
-	values []string, valueFiles []string) error {
+	values []string, valueStrings []string, valueFiles []string) error {
 	args := []string{"template", "--name", releaseName, "--namespace", ns, chart, "--output-dir", outDir, "--debug"}
 	if upgrade {
 		args = append(args, "--is-upgrade")
 	}
 	for _, value := range values {
 		args = append(args, "--set", value)
+	}
+	for _, value := range valueStrings {
+		args = append(args, "--set-string", value)
 	}
 	for _, valueFile := range valueFiles {
 		args = append(args, "--values", valueFile)
@@ -429,7 +443,7 @@ func (h *HelmCLI) Template(chart string, releaseName string, ns string, outDir s
 }
 
 // UpgradeChart upgrades a helm chart according with given helm flags
-func (h *HelmCLI) UpgradeChart(chart string, releaseName string, ns string, version string, install bool, timeout int, force bool, wait bool, values []string, valueFiles []string, repo string, username string, password string) error {
+func (h *HelmCLI) UpgradeChart(chart string, releaseName string, ns string, version string, install bool, timeout int, force bool, wait bool, values []string, valueStrings []string, valueFiles []string, repo string, username string, password string) error {
 	var err error
 	currentNamespace := ""
 	if h.Binary == "helm3" {
@@ -473,6 +487,9 @@ func (h *HelmCLI) UpgradeChart(chart string, releaseName string, ns string, vers
 	}
 	for _, value := range values {
 		args = append(args, "--set", value)
+	}
+	for _, value := range valueStrings {
+		args = append(args, "--set-string", value)
 	}
 	for _, valueFile := range valueFiles {
 		args = append(args, "--values", valueFile)

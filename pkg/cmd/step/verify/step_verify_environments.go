@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/jenkins-x/jx/pkg/boot"
 	"github.com/jenkins-x/jx/pkg/helm"
@@ -152,6 +153,8 @@ func (o *StepVerifyEnvironmentsOptions) storeRequirementsInTeamSettings(requirem
 			return errors.Wrap(err, "there was a problem marshalling the requirements file to include it in the TeamSettings")
 		}
 		env.Spec.TeamSettings.BootRequirements = string(reqBytes)
+		// Also set the gitServer from the requirements.
+		env.Spec.TeamSettings.GitServer = requirements.Cluster.GitServer
 		return nil
 	})
 	if err != nil {
@@ -260,10 +263,24 @@ func (o *StepVerifyEnvironmentsOptions) validateGitRepository(name string, requi
 	if err != nil {
 		return errors.Wrapf(err, "failed to parse git URL %s and %s", gitURL, message)
 	}
-	authConfigSvc, err := o.GitAuthConfigService()
+
+	gha, err := o.IsGitHubAppMode()
 	if err != nil {
-		return errors.Wrap(err, "creating git auth config service")
+		return errors.Wrap(err, "checking the GitHub app mode")
 	}
+	var authConfigSvc auth.ConfigService
+	if gha {
+		authConfigSvc, err = o.GitAuthConfigServiceGitHubAppMode("github")
+		if err != nil {
+			return errors.Wrap(err, "creating git auth config service")
+		}
+	} else {
+		authConfigSvc, err = o.GitAuthConfigService()
+		if err != nil {
+			return errors.Wrap(err, "creating git auth config service")
+		}
+	}
+
 	return o.createEnvironmentRepository(name, requirements, authConfigSvc, environment, gitURL, envGitInfo)
 }
 
@@ -336,7 +353,7 @@ func (o *StepVerifyEnvironmentsOptions) createEnvironmentRepository(name string,
 	}
 
 	if name == kube.LabelValueDevEnvironment || environment.Spec.Kind == v1.EnvironmentKindTypeDevelopment {
-		if o.IsJXBoot() && requirements.GitOps {
+		if o.IsJXBoot() && requirements.GitOps && os.Getenv(boot.DisablePushUpdatesToDevEnvironment) != "true" {
 			provider, err := envGitInfo.CreateProviderForUser(server, userAuth, gitKind, gitter)
 			if err != nil {
 				return errors.Wrap(err, "unable to create git provider")
@@ -401,7 +418,11 @@ func (o *StepVerifyEnvironmentsOptions) handleDevEnvironmentRepository(envGitInf
 }
 
 func (o *StepVerifyEnvironmentsOptions) createDevEnvironmentRepository(gitInfo *gits.GitRepository, localRepoDir string, fromGitURL string, fromGitRef string, privateRepo bool, requirements *config.RequirementsConfig, provider gits.GitProvider, gitter gits.Gitter) (*gits.GitRepository, error) {
-	if fromGitURL == config.DefaultBootRepository && fromGitRef == "master" {
+	isDefaultBootURL, err := gits.IsDefaultBootConfigURL(fromGitURL)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to verify whether %s is the default boot config repository", fromGitURL)
+	}
+	if isDefaultBootURL && fromGitRef == "master" {
 		// If the GitURL is not overridden and the GitRef is set to it's default value then look up the version number
 		resolver, err := o.CreateVersionResolver(requirements.VersionStream.URL, requirements.VersionStream.Ref)
 		if err != nil {
@@ -427,7 +448,20 @@ func (o *StepVerifyEnvironmentsOptions) createDevEnvironmentRepository(gitInfo *
 		log.Logger().Debugf("set commitish to '%s'", commitish)
 	}
 
-	duplicateInfo, err := gits.DuplicateGitRepoFromCommitish(gitInfo.Organisation, gitInfo.Name, fromGitURL, commitish, "master", privateRepo, provider, gitter)
+	fromGitInfo, err := gits.ParseGitURL(fromGitURL)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to parse upstream boot config URL %s", fromGitURL)
+	}
+
+	var fromRepo *gits.GitRepository
+	// If the to URL and from URL aren't on the same host, pass in a simple repo info to duplicate rather than using the provider.
+	if fromGitInfo.Host != gitInfo.Host {
+		fromRepo = fromGitInfo
+		fromRepo.CloneURL = fromGitURL
+		fromRepo.HTMLURL = strings.TrimSuffix(fromGitURL, ".git")
+	}
+
+	duplicateInfo, err := gits.DuplicateGitRepoFromCommitish(gitInfo.Organisation, gitInfo.Name, fromGitURL, commitish, "master", privateRepo, provider, gitter, fromRepo)
 	if err != nil {
 		return nil, errors.Wrapf(err, "duplicating %s to %s/%s", fromGitURL, gitInfo.Organisation, gitInfo.Name)
 	}
@@ -462,12 +496,19 @@ func (o *StepVerifyEnvironmentsOptions) pushDevEnvironmentUpdates(environmentRep
 		}
 	}
 
-	userDetails := provider.UserAuth()
-	authenticatedPushURL, err := gitter.CreateAuthenticatedURL(environmentRepo.CloneURL, &userDetails)
+	remoteURL, err := gits.AddUserToURL(environmentRepo.CloneURL, provider.CurrentUsername())
 	if err != nil {
-		return errors.Wrapf(err, "failed to create push URL for %s", environmentRepo.CloneURL)
+		return errors.Wrapf(err, "unable to add username to git url %s", environmentRepo.CloneURL)
 	}
-	err = gitter.Push(localRepoDir, authenticatedPushURL, true, "master")
+	remoteName, err := gits.GetRemoteForURL(localRepoDir, remoteURL, gitter)
+	if err != nil {
+		return errors.Wrapf(err, "cannot determine remote name for %s", environmentRepo.CloneURL)
+	}
+	if remoteName == "" {
+		return errors.Wrapf(err, "no remote configured for %s", environmentRepo.CloneURL)
+	}
+
+	err = gitter.Push(localRepoDir, remoteName, true, "master")
 	if err != nil {
 		return errors.Wrapf(err, "unable to push %s to %s", localRepoDir, environmentRepo.URL)
 	}
@@ -516,7 +557,7 @@ func (o *StepVerifyEnvironmentsOptions) createEnvironmentHelmValues(requirements
 				secretName = fmt.Sprintf("tls-%s-s", domain)
 			}
 		}
-		helmValues.ExposeController.Config.TLSSecretName = secretName
+		helmValues.ExposeController.Config.TLSSecretName = strings.ReplaceAll(secretName, ".", "-")
 	}
 
 	return helmValues, nil

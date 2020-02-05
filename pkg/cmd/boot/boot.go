@@ -40,15 +40,18 @@ type BootOptions struct {
 	EndStep      string
 	HelmLogLevel string
 
-	// The bootstrap URL for the version stream. Once we have a jx-requirements.yaml files, we read that
+	// The bootstrap URL for the version stream. Once we have a jx-requirements.yml files, we read that
 	VersionStreamURL string
-	// The bootstrap ref for the version stream. Once we have a jx-requirements.yaml, we read that
+	// The bootstrap ref for the version stream. Once we have a jx-requirements.yml, we read that
 	VersionStreamRef string
 
 	// RequirementsFile provided by the user to override the default requirements file from repository
 	RequirementsFile string
 
 	AttemptRestore bool
+
+	// UpgradeGit if we want to automatically upgrade this boot clone if there have been changes since the current clone
+	NoUpgradeGit bool
 }
 
 var (
@@ -64,9 +67,9 @@ var (
 		jx create cluster gke --skip-installation
 
 		# now lets boot up Jenkins X installing/upgrading whatever is needed
-		jx boot 
+		jx boot
 
-		# if we have already booted and just want to apply some environment changes without 
+		# if we have already booted and just want to apply some environment changes without
         # re-applying ingress and so forth we can start at the environment step:
 		jx boot --start-step install-env
 `)
@@ -94,13 +97,14 @@ func NewCmdBoot(commonOpts *opts.CommonOptions) *cobra.Command {
 	cmd.Flags().StringVarP(&options.Dir, "dir", "d", ".", "the directory to look for the Jenkins X Pipeline, requirements and charts")
 	cmd.Flags().StringVarP(&options.GitURL, "git-url", "u", "", "override the Git clone URL for the JX Boot source to start from, ignoring the versions stream. Normally specified with git-ref as well")
 	cmd.Flags().StringVarP(&options.GitRef, "git-ref", "", "", "override the Git ref for the JX Boot source to start from, ignoring the versions stream. Normally specified with git-url as well")
-	cmd.Flags().StringVarP(&options.VersionStreamURL, "versions-repo", "", config.DefaultVersionsURL, "the bootstrap URL for the versions repo. Once the boot config is cloned, the repo will be then read from the jx-requirements.yaml")
-	cmd.Flags().StringVarP(&options.VersionStreamRef, "versions-ref", "", config.DefaultVersionsRef, "the bootstrap ref for the versions repo. Once the boot config is cloned, the repo will be then read from the jx-requirements.yaml")
+	cmd.Flags().StringVarP(&options.VersionStreamURL, "versions-repo", "", config.DefaultVersionsURL, "the bootstrap URL for the versions repo. Once the boot config is cloned, the repo will be then read from the jx-requirements.yml")
+	cmd.Flags().StringVarP(&options.VersionStreamRef, "versions-ref", "", config.DefaultVersionsRef, "the bootstrap ref for the versions repo. Once the boot config is cloned, the repo will be then read from the jx-requirements.yml")
 	cmd.Flags().StringVarP(&options.StartStep, "start-step", "s", "", "the step in the pipeline to start from")
 	cmd.Flags().StringVarP(&options.EndStep, "end-step", "e", "", "the step in the pipeline to end at")
 	cmd.Flags().StringVarP(&options.HelmLogLevel, "helm-log", "v", "", "sets the helm logging level from 0 to 9. Passed into the helm CLI via the '-v' argument. Useful to diagnose helm related issues")
 	cmd.Flags().StringVarP(&options.RequirementsFile, "requirements", "r", "", "requirements file which will overwrite the default requirements file")
 	cmd.Flags().BoolVarP(&options.AttemptRestore, "attempt-restore", "a", false, "attempt to boot from an existing dev environment repository")
+	cmd.Flags().BoolVarP(&options.NoUpgradeGit, "no-update-git", "", false, "disables any attempt to update the local git clone if its old")
 
 	return cmd
 }
@@ -135,7 +139,7 @@ func (o *BootOptions) Run() error {
 
 	gitURL, gitRef, err := gits.GetGitInfoFromDirectory(o.Dir, o.Git())
 	if err != nil {
-		log.Logger().Warnf("there was a problem obtaining the boot config repository git configuration, falling back to defaults. Error: %s", err.Error())
+		log.Logger().Info("Creating boot config with defaults, as not in an existing boot directory with a git repository.")
 		gitURL = config.DefaultBootRepository
 		gitRef = config.DefaultVersionsRef
 	}
@@ -156,6 +160,11 @@ func (o *BootOptions) Run() error {
 
 	requirements, _, _ := config.LoadRequirementsConfig(o.Dir)
 
+	err = o.ConfigureCommonOptions(requirements)
+	if err != nil {
+		return err
+	}
+
 	// lets report errors parsing this file after the check we are outside of a git clone
 	o.defaultVersionStream(requirements)
 
@@ -163,7 +172,9 @@ func (o *BootOptions) Run() error {
 	if err != nil {
 		return errors.Wrapf(err, "there was a problem creating a version resolver from versions stream repository %s and ref %s", requirements.VersionStream.URL, requirements.VersionStream.Ref)
 	}
-	if o.GitRef == "" {
+
+	// lets avoid trying to reset the current git clone to master if using NoUpgradeGit
+	if o.GitRef == "" && !o.NoUpgradeGit {
 		gitRef, err = o.determineGitRef(resolver, requirements, gitURL)
 		if err != nil {
 			return errors.Wrapf(err, "failed to determine git ref")
@@ -187,7 +198,9 @@ func (o *BootOptions) Run() error {
 
 			help := "A git clone of a Jenkins X Boot source repository is required for 'jx boot'"
 			message := "Do you want to clone the Jenkins X Boot Git repository?"
-			if !util.Confirm(message, true, help, o.GetIOFileHandles()) {
+			if answer, err := util.Confirm(message, true, help, o.GetIOFileHandles()); err != nil {
+				return err
+			} else if !answer {
 				return fmt.Errorf("Please run this command again inside a git clone from a Jenkins X Boot repository")
 			}
 		}
@@ -277,7 +290,7 @@ func (o *BootOptions) Run() error {
 	}
 
 	// only update boot if the a GitRef has not been supplied
-	if o.GitRef == "" {
+	if o.GitRef == "" && !o.NoUpgradeGit {
 		err = o.updateBootCloneIfOutOfDate(gitRef)
 		if err != nil {
 			return err
@@ -306,6 +319,9 @@ func (o *BootOptions) Run() error {
 		boot.ConfigBaseRefEnvVarName:       gitRef,
 		boot.VersionsRepoURLEnvVarName:     requirements.VersionStream.URL,
 		boot.VersionsRepoBaseRefEnvVarName: requirements.VersionStream.Ref,
+	}
+	if o.NoUpgradeGit {
+		so.AdditionalEnvVars[boot.DisablePushUpdatesToDevEnvironment] = "true"
 	}
 	if requirements.Cluster.HelmMajorVersion == "3" {
 		so.AdditionalEnvVars["JX_HELM3"] = "true"

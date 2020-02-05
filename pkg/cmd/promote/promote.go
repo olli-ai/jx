@@ -80,6 +80,9 @@ type PromoteOptions struct {
 	releaseResource         *v1.Release
 	ReleaseInfo             *ReleaseInfo
 	prow                    bool
+
+	// Used for testing
+	CloneDir string
 }
 
 type ReleaseInfo struct {
@@ -93,17 +96,17 @@ var (
 	promote_long = templates.LongDesc(`
 		Promotes a version of an application to zero to many permanent environments.
 
-		For more documentation see: [https://jenkins-x.io/about/features/#promotion](https://jenkins-x.io/about/features/#promotion)
+		For more documentation see: [https://jenkins-x.io/docs/getting-started/promotion/](https://jenkins-x.io/docs/getting-started/promotion/)
 
 `)
 
 	promote_example = templates.Examples(`
-		# Promote a version of the current application to staging 
+		# Promote a version of the current application to staging
         # discovering the application name from the source code
 		jx promote --version 1.2.3 --env staging
 
 		# Promote a version of the myapp application to production
-		jx promote myapp --version 1.2.3 --env production
+		jx promote --app myapp --version 1.2.3 --env production
 
 		# To search for all the available charts for a given name use -f.
 		# e.g. to find a redis chart to install
@@ -112,7 +115,7 @@ var (
 		# To promote a postgres chart using an alias
 		jx promote -f postgres --alias mydb
 
-		# To create or update a Preview Environment please see the 'jx preview' command
+		# To create or update a Preview Environment please see the 'jx preview' command if you are inside a git clone of a repo
 		jx preview
 	`)
 )
@@ -504,14 +507,19 @@ func (o *PromoteOptions) Promote(targetNS string, env *v1.Environment, warnIfAut
 	}
 	promoteKey.OnPromoteUpdate(kubeClient, jxClient, o.Namespace, startPromote)
 
+	setValues, setStrings := o.GetEnvChartValues(o.Namespace, env)
+
 	helmOptions := helm.InstallChartOptions{
 		Chart:       fullAppName,
 		ReleaseName: releaseName,
 		Ns:          targetNS,
 		Version:     version,
+		SetValues:   setValues,
+		SetStrings:  setStrings,
 		NoForce:     true,
 		Wait:        true,
 	}
+
 	err = o.InstallChartWithOptions(helmOptions)
 	if err == nil {
 		err = o.CommentOnIssues(targetNS, env, promoteKey)
@@ -555,9 +563,10 @@ func (o *PromoteOptions) PromoteViaPullRequest(env *v1.Environment, releaseInfo 
 	if err != nil {
 		return errors.Wrapf(err, "creating git provider for %s", env.Spec.Source.URL)
 	}
-	environmentsDir, err := o.EnvironmentsDir()
-	if err != nil {
-		return errors.Wrapf(err, "getting environments dir")
+
+	envDir := ""
+	if o.CloneDir != "" {
+		envDir = o.CloneDir
 	}
 
 	options := environments.EnvironmentPullRequestOptions{
@@ -569,7 +578,7 @@ func (o *PromoteOptions) PromoteViaPullRequest(env *v1.Environment, releaseInfo 
 	if releaseInfo.PullRequestInfo != nil && releaseInfo.PullRequestInfo.PullRequest != nil {
 		filter.Number = releaseInfo.PullRequestInfo.PullRequest.Number
 	}
-	info, err := options.Create(env, environmentsDir, &details, filter, "", true)
+	info, err := options.Create(env, envDir, &details, filter, "", true)
 	releaseInfo.PullRequestInfo = info
 	return err
 }
@@ -1055,7 +1064,7 @@ func (o *PromoteOptions) CommentOnIssues(targetNS string, environment *v1.Enviro
 	appNames := []string{app, o.ReleaseName, ens + "-" + app}
 	url := ""
 	for _, n := range appNames {
-		url, err = services.FindServiceURL(kubeClient, ens, n)
+		url, err = services.FindServiceURL(kubeClient, ens, naming.ToValidName(n))
 		if url != "" {
 			break
 		}
@@ -1170,4 +1179,28 @@ func (o *PromoteOptions) SearchForChart(filter string) (string, error) {
 	o.Version = chart.ChartVersion
 	o.HelmRepositoryURL = repoUrl
 	return appName, nil
+}
+
+func (o *PromoteOptions) GetEnvChartValues(targetNS string, env *v1.Environment) ([]string, []string) {
+	kind := string(env.Spec.Kind)
+	values := []string{
+		fmt.Sprintf("tags.jx-ns-%s=true", targetNS),
+		fmt.Sprintf("global.jxNs%s=true", util.ToCamelCase(targetNS)),
+		fmt.Sprintf("tags.jx-%s=true", strings.ToLower(kind)),
+		fmt.Sprintf("tags.jx-env-%s=true", env.ObjectMeta.Name),
+		fmt.Sprintf("global.jx%s=true", kind),
+		fmt.Sprintf("global.jxEnv%s=true", util.ToCamelCase(env.ObjectMeta.Name)),
+	}
+	valueString := []string{
+		fmt.Sprintf("global.jxNs=%s", targetNS),
+		fmt.Sprintf("global.jxTypeEnv=%s", strings.ToLower(kind)),
+		fmt.Sprintf("global.jxEnv=%s", env.ObjectMeta.Name),
+	}
+	if env.Spec.Kind == v1.EnvironmentKindTypePreview {
+		valueString = append(valueString,
+			fmt.Sprintf("global.jxPreviewApp=%s", env.Spec.PreviewGitSpec.ApplicationName),
+			fmt.Sprintf("global.jxPreviewPr=%s", env.Spec.PreviewGitSpec.Name),
+		)
+	}
+	return values, valueString
 }

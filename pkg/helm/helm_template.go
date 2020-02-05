@@ -225,29 +225,32 @@ func (h *HelmTemplate) Version(tls bool) (string, error) {
 }
 
 // Template generates the YAML from the chart template to the given directory
-func (h *HelmTemplate) Template(chart string, releaseName string, ns string, outDir string, upgrade bool, values []string,
+func (h *HelmTemplate) Template(chart string, releaseName string, ns string, outDir string, upgrade bool, values []string, valueStrings []string,
 	valueFiles []string) error {
 
-	return h.Client.Template(chart, releaseName, ns, outDir, upgrade, values, valueFiles)
+	return h.Client.Template(chart, releaseName, ns, outDir, upgrade, values, valueStrings, valueFiles)
 }
 
 // Mutation API
 
 // InstallChart installs a helm chart according with the given flags
 func (h *HelmTemplate) InstallChart(chart string, releaseName string, ns string, version string, timeout int,
-	values []string, valueFiles []string, repo string, username string, password string) error {
+	values []string, valueStrings []string, valueFiles []string, repo string, username string, password string) error {
 
 	err := h.clearOutputDir(releaseName)
 	if err != nil {
 		return err
 	}
 	outputDir, _, chartsDir, err := h.getDirectories(releaseName)
+	if err != nil {
+		return err
+	}
 
 	chartDir, err := h.fetchChart(chart, version, chartsDir, repo, username, password)
 	if err != nil {
 		return err
 	}
-	err = h.Client.Template(chartDir, releaseName, ns, outputDir, false, values, valueFiles)
+	err = h.Client.Template(chartDir, releaseName, ns, outputDir, false, values, valueStrings, valueFiles)
 	if err != nil {
 		return err
 	}
@@ -285,21 +288,22 @@ func (h *HelmTemplate) InstallChart(chart string, releaseName string, ns string,
 
 	err = h.kubectlApply(ns, releaseName, wait, create, force, outputDir)
 	if err != nil {
-		h.deleteHooks(helmHooks, helmPrePhase, hookFailed, ns)
-		return err
+		err2 := h.deleteHooks(helmHooks, helmPrePhase, hookFailed, ns)
+		return util.CombineErrors(err, err2)
 	}
-	log.Logger().Info("")
-	h.deleteHooks(helmHooks, helmPrePhase, hookSucceeded, ns)
+	err = h.deleteHooks(helmHooks, helmPrePhase, hookSucceeded, ns)
+	if err != nil {
+		log.Logger().Warnf("Failed to delete the %s hook, due to: %s", helmPrePhase, err)
+	}
 
 	err = h.runHooks(helmHooks, helmPostPhase, ns, chart, releaseName, wait, create, force)
 	if err != nil {
-		h.deleteHooks(helmHooks, helmPostPhase, hookFailed, ns)
-		return err
+		err2 := h.deleteHooks(helmHooks, helmPostPhase, hookFailed, ns)
+		return util.CombineErrors(err, err2)
 	}
 
 	err = h.deleteHooks(helmHooks, helmPostPhase, hookSucceeded, ns)
 	err2 := h.deleteOldResources(ns, releaseName, versionText, wait)
-	log.Logger().Info("")
 
 	return util.CombineErrors(err, err2)
 }
@@ -312,13 +316,15 @@ func (h *HelmTemplate) FetchChart(chart string, version string, untar bool, unta
 }
 
 // UpgradeChart upgrades a helm chart according with given helm flags
-func (h *HelmTemplate) UpgradeChart(chart string, releaseName string, ns string, version string, install bool, timeout int, force bool, wait bool, values []string, valueFiles []string, repo string, username string, password string) error {
-
+func (h *HelmTemplate) UpgradeChart(chart string, releaseName string, ns string, version string, install bool, timeout int, force bool, wait bool, values []string, valueStrings []string, valueFiles []string, repo string, username string, password string) error {
 	err := h.clearOutputDir(releaseName)
 	if err != nil {
 		return err
 	}
 	outputDir, _, chartsDir, err := h.getDirectories(releaseName)
+	if err != nil {
+		return err
+	}
 
 	// check if we are installing a chart from the filesystem
 	chartDir := filepath.Join(h.CWD, chart)
@@ -333,7 +339,7 @@ func (h *HelmTemplate) UpgradeChart(chart string, releaseName string, ns string,
 			return err
 		}
 	}
-	err = h.Client.Template(chartDir, releaseName, ns, outputDir, false, values, valueFiles)
+	err = h.Client.Template(chartDir, releaseName, ns, outputDir, false, values, valueStrings, valueFiles)
 	if err != nil {
 		return err
 	}
@@ -370,15 +376,18 @@ func (h *HelmTemplate) UpgradeChart(chart string, releaseName string, ns string,
 
 	err = h.kubectlApply(ns, releaseName, wait, create, force, outputDir)
 	if err != nil {
-		h.deleteHooks(helmHooks, helmPrePhase, hookFailed, ns)
-		return err
+		err2 := h.deleteHooks(helmHooks, helmPrePhase, hookFailed, ns)
+		return util.CombineErrors(err, err2)
 	}
-	h.deleteHooks(helmHooks, helmPrePhase, hookSucceeded, ns)
+	err = h.deleteHooks(helmHooks, helmPrePhase, hookSucceeded, ns)
+	if err != nil {
+		log.Logger().Warnf("Failed to delete the %s hook, due to: %s", helmPrePhase, err)
+	}
 
 	err = h.runHooks(helmHooks, helmPostPhase, ns, chart, releaseName, wait, create, force)
 	if err != nil {
-		h.deleteHooks(helmHooks, helmPostPhase, hookFailed, ns)
-		return err
+		err2 := h.deleteHooks(helmHooks, helmPostPhase, hookFailed, ns)
+		return util.CombineErrors(err, err2)
 	}
 
 	err = h.deleteHooks(helmHooks, helmPostPhase, hookSucceeded, ns)
@@ -392,8 +401,6 @@ func (h *HelmTemplate) DecryptSecrets(location string) error {
 }
 
 func (h *HelmTemplate) kubectlApply(ns string, releaseName string, wait bool, create bool, force bool, dir string) error {
-
-	// does namespaces dir exist?
 	namespacesDir := filepath.Join(dir, "namespaces")
 	if _, err := os.Stat(namespacesDir); !os.IsNotExist(err) {
 
@@ -406,7 +413,7 @@ func (h *HelmTemplate) kubectlApply(ns string, releaseName string, wait bool, cr
 			namespace := filepath.Base(path.Name())
 			fullPath := filepath.Join(namespacesDir, path.Name())
 
-			log.Logger().Debugf("Applying generated chart '%s' YAML via kubectl in dir: %s to namespace %s", releaseName, fullPath, namespace)
+			log.Logger().Debugf("Applying generated chart %q YAML via kubectl in dir: %s to namespace %s", releaseName, fullPath, namespace)
 
 			command := "apply"
 			if create {
@@ -435,7 +442,7 @@ func (h *HelmTemplate) kubectlApply(ns string, releaseName string, wait bool, cr
 		return err
 	}
 
-	log.Logger().Debugf("Applying generated chart '%s' YAML via kubectl in dir: %s to namespace %s", releaseName, dir, ns)
+	log.Logger().Debugf("Applying generated chart %q YAML via kubectl in dir: %s to namespace %s", releaseName, dir, ns)
 	command := "apply"
 	if create {
 		command = "create"
@@ -458,7 +465,6 @@ func (h *HelmTemplate) kubectlApply(ns string, releaseName string, wait bool, cr
 		return err
 	}
 
-	log.Logger().Info("")
 	return nil
 
 }
@@ -484,7 +490,6 @@ func (h *HelmTemplate) kubectlApplyFile(ns string, helmHook string, wait bool, c
 		args = append(args, "--validate=false")
 	}
 	err := h.runKubectl(args...)
-	log.Logger().Info("")
 	return err
 }
 

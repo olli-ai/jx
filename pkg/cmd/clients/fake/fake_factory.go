@@ -4,6 +4,8 @@ import (
 	"io"
 	"os"
 
+	"k8s.io/client-go/dynamic"
+
 	"github.com/jenkins-x/jx/pkg/cmd/clients"
 	"github.com/jenkins-x/jx/pkg/util"
 
@@ -22,7 +24,7 @@ import (
 	vaultoperatorclient "github.com/banzaicloud/bank-vaults/operator/pkg/client/clientset/versioned"
 	fake_vaultoperatorclient "github.com/banzaicloud/bank-vaults/operator/pkg/client/clientset/versioned/fake"
 	"github.com/heptio/sonobuoy/pkg/client"
-	"github.com/heptio/sonobuoy/pkg/dynamic"
+	sonoboy_dynamic "github.com/heptio/sonobuoy/pkg/dynamic"
 	"github.com/jenkins-x/jx/pkg/auth"
 	"github.com/jenkins-x/jx/pkg/client/clientset/versioned"
 	"github.com/jenkins-x/jx/pkg/gits"
@@ -30,8 +32,6 @@ import (
 	"github.com/jenkins-x/jx/pkg/kube"
 	"github.com/jenkins-x/jx/pkg/table"
 	fake_vault "github.com/jenkins-x/jx/pkg/vault/fake"
-	build "github.com/knative/build/pkg/client/clientset/versioned"
-	buildfake "github.com/knative/build/pkg/client/clientset/versioned/fake"
 	kserve "github.com/knative/serving/pkg/client/clientset/versioned"
 	"github.com/pkg/errors"
 	tektonclient "github.com/tektoncd/pipeline/pkg/client/clientset/versioned"
@@ -41,6 +41,8 @@ import (
 	"k8s.io/client-go/rest"
 	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 	fake_metricsclient "k8s.io/metrics/pkg/client/clientset/versioned/fake"
+	prowjobclient "k8s.io/test-infra/prow/client/clientset/versioned"
+	fake_prowjobclient "k8s.io/test-infra/prow/client/clientset/versioned/fake"
 )
 
 // FakeFactory points to a fake factory implementation
@@ -56,12 +58,13 @@ type FakeFactory struct {
 	offline         bool
 
 	// cached fake clients
-	apiClient    apiextensionsclientset.Interface
-	buildClient  build.Interface
-	jxClient     versioned.Interface
-	kubeClient   kubernetes.Interface
-	kserveClient kserve.Interface
-	tektonClient tektonclient.Interface
+	apiClient     apiextensionsclientset.Interface
+	jxClient      versioned.Interface
+	kubeClient    kubernetes.Interface
+	kserveClient  kserve.Interface
+	tektonClient  tektonclient.Interface
+	prowJobClient prowjobclient.Interface
+	dyncClient    dynamic.Interface
 }
 
 var _ clients.Factory = (*FakeFactory)(nil)
@@ -78,12 +81,16 @@ func NewFakeFactory() clients.Factory {
 // NewFakeFactoryFromClients creates a fake factory which uses fake k8s clients for testing
 func NewFakeFactoryFromClients(apiClient apiextensionsclientset.Interface,
 	jxClient versioned.Interface,
-	kubeClient kubernetes.Interface) *FakeFactory {
+	kubeClient kubernetes.Interface,
+	tektonClient tektonclient.Interface,
+	dyncClient dynamic.Interface) *FakeFactory {
 	f := &FakeFactory{
-		namespace:  "jx",
-		apiClient:  apiClient,
-		jxClient:   jxClient,
-		kubeClient: kubeClient,
+		namespace:    "jx",
+		apiClient:    apiClient,
+		jxClient:     jxClient,
+		kubeClient:   kubeClient,
+		tektonClient: tektonClient,
+		dyncClient:   dyncClient,
 	}
 	f.kubeConfig = kube.NewKubeConfig()
 	return f
@@ -266,12 +273,12 @@ func (f *FakeFactory) CreateApiExtensionsClient() (apiextensionsclientset.Interf
 	return f.apiClient, nil
 }
 
-// CreateKnativeBuildClient creates knative build client
-func (f *FakeFactory) CreateKnativeBuildClient() (build.Interface, string, error) {
-	if f.buildClient == nil {
-		f.buildClient = buildfake.NewSimpleClientset()
+// CreateProwJobClient creates a new Kubernetes client for ProwJob resources
+func (f *FakeFactory) CreateProwJobClient() (prowjobclient.Interface, string, error) {
+	if f.prowJobClient == nil {
+		f.prowJobClient = fake_prowjobclient.NewSimpleClientset()
 	}
-	return f.buildClient, f.namespace, nil
+	return f.prowJobClient, f.namespace, nil
 }
 
 // CreateKnativeServeClient create a new Kubernetes client for Knative serve resources
@@ -291,21 +298,24 @@ func (f *FakeFactory) CreateTektonClient() (tektonclient.Interface, string, erro
 }
 
 // CreateDynamicClient creates a new Kubernetes Dynamic client
-func (f *FakeFactory) CreateDynamicClient() (*dynamic.APIHelper, string, error) {
-	config, err := f.CreateKubeConfig()
-	if err != nil {
-		return nil, "", err
+func (f *FakeFactory) CreateDynamicClient() (dynamic.Interface, string, error) {
+	if f.dyncClient == nil {
+		config, err := f.CreateKubeConfig()
+		if err != nil {
+			return nil, "", err
+		}
+		kubeConfig, _, err := f.kubeConfig.LoadConfig()
+		if err != nil {
+			return nil, "", err
+		}
+		ns := kube.CurrentNamespace(kubeConfig)
+		f.dyncClient, err = dynamic.NewForConfig(config)
+		if err != nil {
+			return nil, ns, err
+		}
+		return f.dyncClient, ns, err
 	}
-	kubeConfig, _, err := f.kubeConfig.LoadConfig()
-	if err != nil {
-		return nil, "", err
-	}
-	ns := kube.CurrentNamespace(kubeConfig)
-	client, err := dynamic.NewAPIHelperFromRESTConfig(config)
-	if err != nil {
-		return nil, ns, err
-	}
-	return client, ns, err
+	return f.dyncClient, f.namespace, nil
 }
 
 // CreateMetricsClient creates a new Kubernetes metrics client
@@ -350,7 +360,7 @@ func (f *FakeFactory) CreateComplianceClient() (*client.SonobuoyClient, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "compliance client failed to load the Kubernetes configuration")
 	}
-	skc, err := dynamic.NewAPIHelperFromRESTConfig(config)
+	skc, err := sonoboy_dynamic.NewAPIHelperFromRESTConfig(config)
 	if err != nil {
 		return nil, errors.Wrap(err, "compliance dynamic client failed to be created")
 	}

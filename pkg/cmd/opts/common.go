@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jenkins-x/jx/pkg/config"
+
 	"github.com/jenkins-x/jx/pkg/kube/cluster"
 
 	gojenkins "github.com/jenkins-x/golang-jenkins"
@@ -39,7 +41,6 @@ import (
 	"github.com/jenkins-x/jx/pkg/table"
 	"github.com/jenkins-x/jx/pkg/util"
 	certmngclient "github.com/jetstack/cert-manager/pkg/client/clientset/versioned"
-	buildclient "github.com/knative/build/pkg/client/clientset/versioned"
 	istioclient "github.com/knative/pkg/client/clientset/versioned"
 	kserve "github.com/knative/serving/pkg/client/clientset/versioned"
 	"github.com/spf13/cobra"
@@ -49,6 +50,7 @@ import (
 	gitcfg "gopkg.in/src-d/go-git.v4/config"
 	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	"k8s.io/client-go/kubernetes"
+	prowjobclient "k8s.io/test-infra/prow/client/clientset/versioned"
 )
 
 // LogLevel represents the logging level when reporting feedback
@@ -141,10 +143,10 @@ type CommonOptions struct {
 	jenkinsClient       gojenkins.JenkinsClient
 	jxClient            versioned.Interface
 	gcloudClient        gke.GClouder
-	knbClient           buildclient.Interface
 	kserveClient        kserve.Interface
 	kubeClient          kubernetes.Interface
 	kuber               kube.Kuber
+	prowJobClient       prowjobclient.Interface
 	resourcesInstaller  resources.Installer
 	systemVaultClient   vault.Client
 	tektonClient        tektonclient.Interface
@@ -414,24 +416,6 @@ func (o *CommonOptions) TektonClient() (tektonclient.Interface, string, error) {
 	return o.tektonClient, o.currentNamespace, nil
 }
 
-// KnativeBuildClient returns or creates the knative build client
-func (o *CommonOptions) KnativeBuildClient() (buildclient.Interface, string, error) {
-	if o.factory == nil {
-		return nil, "", errors.New("command factory is not initialized")
-	}
-	if o.knbClient == nil {
-		knbClient, ns, err := o.factory.CreateKnativeBuildClient()
-		if err != nil {
-			return nil, ns, err
-		}
-		o.knbClient = knbClient
-		if o.currentNamespace == "" {
-			o.currentNamespace = ns
-		}
-	}
-	return o.knbClient, o.currentNamespace, nil
-}
-
 // KnativeServeClient returns or creates the knative serve client
 func (o *CommonOptions) KnativeServeClient() (kserve.Interface, string, error) {
 	if o.factory == nil {
@@ -453,6 +437,24 @@ func (o *CommonOptions) KnativeServeClient() (kserve.Interface, string, error) {
 // SetKnativeServeClient sets the kantive serve client
 func (o *CommonOptions) SetKnativeServeClient(client kserve.Interface) {
 	o.kserveClient = client
+}
+
+// ProwJobClient returns or creates the ProwJob client
+func (o *CommonOptions) ProwJobClient() (prowjobclient.Interface, string, error) {
+	if o.factory == nil {
+		return nil, "", errors.New("command factory is not initialized")
+	}
+	if o.prowJobClient == nil {
+		prowJobClient, ns, err := o.factory.CreateProwJobClient()
+		if err != nil {
+			return nil, ns, err
+		}
+		o.prowJobClient = prowJobClient
+		if o.currentNamespace == "" {
+			o.currentNamespace = ns
+		}
+	}
+	return o.prowJobClient, o.currentNamespace, nil
 }
 
 // JXClientAndAdminNamespace returns or creates the jx client and admin namespace
@@ -547,7 +549,16 @@ func (o *CommonOptions) Helm() helm.Helmer {
 			// let disable loading/modifying team environments as we typically install on empty k8s clusters
 			o.ModifyEnvironmentFn = o.IgnoreModifyEnvironment
 			o.ModifyDevEnvironmentFn = o.IgnoreModifyDevEnvironment
-			helmer := o.NewHelm(false, "helm3", true, false)
+
+			// check helmfile featureflag but default to existing behaviour if there's any issues
+			var helmer helm.Helmer
+			r, _, _ := config.LoadRequirementsConfig("")
+			if r.Helmfile {
+				helmer = o.NewHelm(false, "helm", true, false)
+			} else {
+				helmer = o.NewHelm(false, "helm3", true, false)
+			}
+
 			o.SetHelm(helmer)
 			return helmer
 		}

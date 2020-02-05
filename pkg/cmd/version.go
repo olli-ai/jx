@@ -114,13 +114,15 @@ func (o *VersionOptions) upgradeCliIfNeeded(resolver *versionstream.VersionResol
 	if currentVersion.LT(newVersion) {
 		app := util.ColorInfo("jx")
 		log.Logger().Info("\n")
-		log.Logger().Warnf("%s version %s is available in the version stream. We highly recommend you upgrade to it.", app, util.ColorInfo(newVersion.String()))
+		log.Logger().Warnf("%s version %s is available in the version stream. You are using %s. We highly recommend you upgrade to it.", app, util.ColorInfo(newVersion.String()), util.ColorInfo(currentVersion.String()))
 		if o.BatchMode {
 			log.Logger().Warnf("To upgrade to this new version use: %s", util.ColorInfo("jx upgrade cli"))
 		} else {
 			log.Logger().Info("\n")
 			message := fmt.Sprintf("Would you like to upgrade to the %s version?", app)
-			if util.Confirm(message, true, "Please indicate if you would like to upgrade the binary version.", o.GetIOFileHandles()) {
+			if answer, err := util.Confirm(message, true, "Please indicate if you would like to upgrade the binary version.", o.GetIOFileHandles()); err != nil {
+				return err
+			} else if answer {
 				options := &upgrade.UpgradeCLIOptions{
 					CreateOptions: options.CreateOptions{
 						CommonOptions: o.CommonOptions,

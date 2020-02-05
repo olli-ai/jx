@@ -16,11 +16,12 @@ spec:
   pipelineRef:
     apiVersion: tekton.dev/v1alpha1
     name: abayer-golang-qs-test-master-klrgx-1
+  podTemplate: {}
   resources:
-  - name: abayer-golang-qs-test-master
+  - name: abayer-golang-qs-test-master-klrgx
     resourceRef:
       apiVersion: tekton.dev/v1alpha1
-      name: abayer-golang-qs-test-master
-  serviceAccount: tekton-bot
+      name: abayer-golang-qs-test-master-klrgx
+  serviceAccountName: tekton-bot
   timeout: 240h0m0s
 status: {}

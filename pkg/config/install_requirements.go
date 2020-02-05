@@ -3,23 +3,22 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"os"
+	"path"
+	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/vrischmann/envconfig"
 
-	"github.com/imdario/mergo"
-	"github.com/jenkins-x/jx/pkg/cloud/gke"
-
 	"github.com/ghodss/yaml"
+	"github.com/imdario/mergo"
 	v1 "github.com/jenkins-x/jx/pkg/apis/jenkins.io/v1"
 	"github.com/jenkins-x/jx/pkg/cloud"
+	"github.com/jenkins-x/jx/pkg/cloud/gke"
 	"github.com/jenkins-x/jx/pkg/log"
 	"github.com/pkg/errors"
-
-	"io/ioutil"
-	"path/filepath"
-	"reflect"
 
 	"github.com/jenkins-x/jx/pkg/util"
 )
@@ -36,6 +35,8 @@ var (
 const (
 	// RequirementsConfigFileName is the name of the requirements configuration file
 	RequirementsConfigFileName = "jx-requirements.yml"
+	// RequirementsValuesFileName is the name of the requirements configuration file
+	RequirementsValuesFileName = "jx-requirements.values.yaml.gotmpl"
 	// RequirementDomainIssuerUsername contains the username used for basic auth when requesting a domain
 	RequirementDomainIssuerUsername = "JX_REQUIREMENT_DOMAIN_ISSUER_USERNAME"
 	// RequirementDomainIssuerPassword contains the password used for basic auth when requesting a domain
@@ -110,6 +111,8 @@ const (
 	RequirementGitAppEnabled = "JX_REQUIREMENT_GITHUB_APP_ENABLED"
 	// RequirementGitAppURL contains the URL to the github app
 	RequirementGitAppURL = "JX_REQUIREMENT_GITHUB_APP_URL"
+	// RequirementDevEnvApprovers contains the optional list of users to populate the dev env's OWNERS with
+	RequirementDevEnvApprovers = "JX_REQUIREMENT_DEV_ENV_APPROVERS"
 )
 
 const (
@@ -210,6 +213,8 @@ type EnvironmentConfig struct {
 	Ingress IngressConfig `json:"ingress,omitempty"`
 	// RemoteCluster specifies this environment runs on a remote cluster to the development cluster
 	RemoteCluster bool `json:"remoteCluster,omitempty"`
+	// PromotionStrategy what kind of promotion strategy to use
+	PromotionStrategy v1.PromotionStrategyType `json:"promotionStrategy,omitempty"`
 }
 
 // IngressConfig contains dns specific requirements
@@ -333,6 +338,10 @@ type ClusterConfig struct {
 	KanikoSAName string `json:"kanikoSAName,omitempty"`
 	// HelmMajorVersion contains the major helm version number. Assumes helm 2.x with no tiller if no value specified
 	HelmMajorVersion string `json:"helmMajorVersion,omitempty"`
+	// DevEnvApprovers contains an optional list of approvers to populate the initial OWNERS file in the dev env repo
+	DevEnvApprovers []string `json:"devEnvApprovers,omitempty"`
+	// DockerRegistryOrg the default organisation used for container images
+	DockerRegistryOrg string `json:"dockerRegistryOrg,omitempty"`
 }
 
 // VaultConfig contains Vault configuration for boot
@@ -421,9 +430,9 @@ type VeleroConfig struct {
 	// ServiceAccount the cloud service account used to run velero
 	ServiceAccount string `json:"serviceAccount,omitempty"`
 	// Schedule of backups
-	Schedule string `json:"schedule,omitempty" envconfig:"JX_REQUIREMENT_VELERO_SCHEDULE"`
+	Schedule string `json:"schedule" envconfig:"JX_REQUIREMENT_VELERO_SCHEDULE"`
 	// TimeToLive period for backups to be retained
-	TimeToLive string `json:"ttl,omitempty" envconfig:"JX_REQUIREMENT_VELERO_TTL"`
+	TimeToLive string `json:"ttl" envconfig:"JX_REQUIREMENT_VELERO_TTL"`
 }
 
 // AutoUpdateConfig contains auto update config
@@ -444,6 +453,12 @@ type GithubAppConfig struct {
 	URL string `json:"url,omitempty"`
 }
 
+// RequirementsValues contains the logical installation requirements in the `jx-requirements.yml` file as helm values
+type RequirementsValues struct {
+	// RequirementsConfig contains the logical installation requirements
+	RequirementsConfig *RequirementsConfig `json:"jxRequirements,omitempty"`
+}
+
 // RequirementsConfig contains the logical installation requirements in the `jx-requirements.yml` file when
 // installing, configuring or upgrading Jenkins X via `jx boot`
 type RequirementsConfig struct {
@@ -460,6 +475,9 @@ type RequirementsConfig struct {
 	// GitOps if enabled we will setup a webhook in the boot configuration git repository so that we can
 	// re-run 'jx boot' when changes merge to the master branch
 	GitOps bool `json:"gitops,omitempty"`
+	// Indicates if we are using helmfile and helm 3 to spin up environments. This is currently an experimental
+	// feature flag used to implement better Multi-Cluster support. See https://github.com/jenkins-x/jx/issues/6442
+	Helmfile bool `json:"helmfile,omitempty"`
 	// Kaniko whether to enable kaniko for building docker images
 	Kaniko bool `json:"kaniko,omitempty"`
 	// Ingress contains ingress specific requirements
@@ -630,6 +648,22 @@ func (c *RequirementsConfig) SaveConfig(fileName string) error {
 	if err != nil {
 		return errors.Wrapf(err, "failed to save file %s", fileName)
 	}
+
+	if c.Helmfile {
+		y := RequirementsValues{
+			RequirementsConfig: c,
+		}
+		data, err = yaml.Marshal(y)
+		if err != nil {
+			return err
+		}
+
+		err = ioutil.WriteFile(path.Join(path.Dir(fileName), RequirementsValuesFileName), data, util.DefaultWritePermissions)
+		if err != nil {
+			return errors.Wrapf(err, "failed to save file %s", RequirementsValuesFileName)
+		}
+	}
+
 	return nil
 }
 
@@ -981,6 +1015,12 @@ func (c *RequirementsConfig) OverrideRequirementsFromEnvironment(gcloudFn func()
 			c.GithubApp = &GithubAppConfig{}
 		}
 		c.GithubApp.URL = os.Getenv(RequirementGitAppURL)
+	}
+	if "" != os.Getenv(RequirementDevEnvApprovers) {
+		rawApprovers := os.Getenv(RequirementDevEnvApprovers)
+		for _, approver := range strings.Split(rawApprovers, ",") {
+			c.Cluster.DevEnvApprovers = append(c.Cluster.DevEnvApprovers, strings.TrimSpace(approver))
+		}
 	}
 	// set this if its not currently configured
 	if c.Cluster.Provider == "gke" {

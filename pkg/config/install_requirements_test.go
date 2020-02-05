@@ -1,3 +1,5 @@
+// +build unit
+
 package config_test
 
 import (
@@ -102,6 +104,7 @@ func TestRequirementsConfigMarshalExistingFileKanikoFalse(t *testing.T) {
 
 	err = requirements.SaveConfig(file)
 	assert.NoError(t, err, "failed to save file %s", file)
+	t.Logf("saved file %s", file)
 
 	requirements, fileName, err := config.LoadRequirementsConfig(dir)
 	assert.NoError(t, err, "failed to load requirements file in dir %s", dir)
@@ -333,4 +336,29 @@ func Test_EnvironmentGitPublic_and_EnvironmentGitPrivate_specified_together_retu
 	err = yaml.Unmarshal(content, config)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "only EnvironmentGitPublic should be used")
+}
+
+func TestHelmfileRequirementValues(t *testing.T) {
+	t.Parallel()
+
+	dir, err := ioutil.TempDir("", "test-requirements-config-")
+	assert.NoError(t, err, "should create a temporary config dir")
+
+	file := filepath.Join(dir, config.RequirementsConfigFileName)
+	requirements := config.NewRequirementsConfig()
+	requirements.Cluster.ClusterName = "jx_rocks"
+
+	err = requirements.SaveConfig(file)
+	assert.NoError(t, err, "failed to save file %s", file)
+	assert.FileExists(t, file)
+	valuesFile := filepath.Join(dir, config.RequirementsValuesFileName)
+
+	valuesFileExists, err := util.FileExists(valuesFile)
+	assert.False(t, valuesFileExists, "file %s should not exist", valuesFile)
+
+	requirements.Helmfile = true
+	err = requirements.SaveConfig(file)
+	assert.NoError(t, err, "failed to save file %s", file)
+	assert.FileExists(t, file)
+	assert.FileExists(t, valuesFile, "file %s should exist", valuesFile)
 }

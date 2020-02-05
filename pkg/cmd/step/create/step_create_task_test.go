@@ -1,3 +1,5 @@
+// +build unit
+
 package create
 
 import (
@@ -369,6 +371,24 @@ func TestGenerateTektonCRDs(t *testing.T) {
 			kind:             "release",
 			branchAsRevision: true,
 		},
+		{
+			name:         "override-pod-template-env-var",
+			language:     "maven",
+			repoName:     "jx-demo-qs",
+			organization: "abayer",
+			branch:       "master",
+			kind:         "release",
+			noKaniko:     true,
+		},
+		{
+			name:         "override-pod-template-env-var-extending-build-pack",
+			language:     "maven-with-overridden-env-var",
+			repoName:     "jx-demo-qs",
+			organization: "abayer",
+			branch:       "master",
+			kind:         "release",
+			noKaniko:     true,
+		},
 	}
 
 	k8sObjects := []runtime.Object{
@@ -379,6 +399,38 @@ func TestGenerateTektonCRDs(t *testing.T) {
 			},
 			Data: map[string]string{
 				"docker.registry": "gcr.io",
+			},
+		},
+		// Dummy secrets created for validation purposes
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "jenkins-docker-cfg",
+				Namespace: "jx",
+			},
+		},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "jenkins-maven-settings",
+				Namespace: "jx",
+			},
+		},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "jenkins-release-gpg",
+				Namespace: "jx",
+			},
+		},
+		// Dummy PVCs created for validation purposes
+		&corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "top-level-volume",
+				Namespace: "jx",
+			},
+		},
+		&corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "stage-level-volume",
+				Namespace: "jx",
 			},
 		},
 	}
@@ -484,9 +536,8 @@ func TestGenerateTektonCRDs(t *testing.T) {
 					assert.NoError(t, err)
 				}
 
-				resourceName := tekton.PipelineResourceNameFromGitInfo(createTask.GitInfo, createTask.Branch, createTask.Context, tekton.BuildPipeline.String(), false)
-				pipelineName := tekton.PipelineResourceNameFromGitInfo(createTask.GitInfo, createTask.Branch, createTask.Context, tekton.BuildPipeline.String(), true)
-				crds, err := createTask.generateTektonCRDs(effectiveProjectConfig, ns, pipelineName, resourceName)
+				pipelineName := tekton.PipelineResourceNameFromGitInfo(createTask.GitInfo, createTask.Branch, createTask.Context, tekton.BuildPipeline.String())
+				crds, err := createTask.generateTektonCRDs(effectiveProjectConfig, ns, pipelineName)
 				if tt.generateError != nil {
 					if err == nil {
 						t.Fatalf("Expected an error %s generating CRDs, did not see it", tt.generateError)

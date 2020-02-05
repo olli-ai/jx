@@ -8,24 +8,23 @@ import (
 	"github.com/jenkins-x/jx/pkg/util"
 	"github.com/jenkins-x/jx/pkg/vault"
 
-	"github.com/heptio/sonobuoy/pkg/dynamic"
 	"github.com/jenkins-x/jx/pkg/helm"
 
+	vaultoperatorclient "github.com/banzaicloud/bank-vaults/operator/pkg/client/clientset/versioned"
 	"github.com/heptio/sonobuoy/pkg/client"
 	"github.com/jenkins-x/jx/pkg/auth"
 	"github.com/jenkins-x/jx/pkg/client/clientset/versioned"
 	"github.com/jenkins-x/jx/pkg/gits"
 	"github.com/jenkins-x/jx/pkg/table"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-
-	vaultoperatorclient "github.com/banzaicloud/bank-vaults/operator/pkg/client/clientset/versioned"
 	certmngclient "github.com/jetstack/cert-manager/pkg/client/clientset/versioned"
-	buildclient "github.com/knative/build/pkg/client/clientset/versioned"
 	kserve "github.com/knative/serving/pkg/client/clientset/versioned"
 	tektonclient "github.com/tektoncd/pipeline/pkg/client/clientset/versioned"
 	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
+	prowjobclient "k8s.io/test-infra/prow/client/clientset/versioned"
 
 	// this is so that we load the auth plugins so we can connect to, say, GCP
 
@@ -115,7 +114,7 @@ type Factory interface {
 	CreateApiExtensionsClient() (apiextensionsclientset.Interface, error)
 
 	// CreateDynamicClient creates a new Kubernetes Dynamic client
-	CreateDynamicClient() (*dynamic.APIHelper, string, error)
+	CreateDynamicClient() (dynamic.Interface, string, error)
 
 	// CreateMetricsClient creates a new Kubernetes metrics client
 	CreateMetricsClient() (metricsclient.Interface, error)
@@ -123,8 +122,8 @@ type Factory interface {
 	// CreateTektonClient create a new Kubernetes client for Tekton resources
 	CreateTektonClient() (tektonclient.Interface, string, error)
 
-	// CreateKnativeBuildClient create a new Kubernetes client for Knative Build resources
-	CreateKnativeBuildClient() (buildclient.Interface, string, error)
+	// CreateProwJobClient creates a new Kubernetes client for ProwJob resources
+	CreateProwJobClient() (prowjobclient.Interface, string, error)
 
 	// CreateKnativeServeClient create a new Kubernetes client for Knative serve resources
 	CreateKnativeServeClient() (kserve.Interface, string, error)

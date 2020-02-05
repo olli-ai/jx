@@ -13,19 +13,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jenkins-x/jx/pkg/log"
-	"github.com/jenkins-x/jx/pkg/versionstream"
-	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
-
 	v1 "github.com/jenkins-x/jx/pkg/apis/jenkins.io/v1"
+	"github.com/jenkins-x/jx/pkg/log"
 	"github.com/jenkins-x/jx/pkg/util"
+	"github.com/jenkins-x/jx/pkg/versionstream"
 	"github.com/knative/pkg/apis"
 	"github.com/pkg/errors"
+	"github.com/tektoncd/pipeline/pkg/apis/pipeline"
 	tektonv1alpha1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
+	"k8s.io/client-go/kubernetes"
 )
 
 const (
@@ -34,6 +34,9 @@ const (
 
 	// WorkingDirRoot is the root directory for working directories.
 	WorkingDirRoot = "/workspace"
+
+	// braceMatchingRegex matches "${inputs.params.foo}" so we can replace it with "$(inputs.params.foo)"
+	braceMatchingRegex = "(\\$(\\{(?P<var>inputs\\.params\\.[_a-zA-Z][_a-zA-Z0-9.-]*)\\}))"
 )
 
 // ParsedPipeline is the internal representation of the Pipeline, used to validate and create CRDs
@@ -522,15 +525,22 @@ func (s *Stage) GetEnv() []corev1.EnvVar {
 	return s.Environment
 }
 
-// Validate checks the parsed ParsedPipeline to find any errors in it.
-// TODO: Improve validation to actually return all the errors via the nested errors?
-// TODO: Add validation for the not-yet-supported-for-CRD-generation sections
+// Validate checks the ParsedPipeline to find any errors in it, without validating against the cluster.
 func (j *ParsedPipeline) Validate(context context.Context) *apis.FieldError {
+	return j.ValidateInCluster(context, nil, "")
+}
+
+// ValidateInCluster checks the parsed ParsedPipeline to find any errors in it, including validation against the cluster.
+func (j *ParsedPipeline) ValidateInCluster(context context.Context, kubeClient kubernetes.Interface, ns string) *apis.FieldError {
 	if err := validateAgent(j.Agent).ViaField("agent"); err != nil {
 		return err
 	}
 
-	if err := validateStages(j.Stages, j.Agent); err != nil {
+	var volumes []*corev1.Volume
+	if j.Options != nil && len(j.Options.Volumes) > 0 {
+		volumes = append(volumes, j.Options.Volumes...)
+	}
+	if err := validateStages(j.Stages, j.Agent, volumes, kubeClient, ns); err != nil {
 		return err
 	}
 
@@ -538,7 +548,7 @@ func (j *ParsedPipeline) Validate(context context.Context) *apis.FieldError {
 		return err
 	}
 
-	if err := validateRootOptions(j.Options).ViaField("options"); err != nil {
+	if err := validateRootOptions(j.Options, volumes, kubeClient, ns).ViaField("options"); err != nil {
 		return err
 	}
 
@@ -576,7 +586,7 @@ func validateAgent(a *Agent) *apis.FieldError {
 
 var containsASCIILetter = regexp.MustCompile(`[a-zA-Z]`).MatchString
 
-func validateStage(s Stage, parentAgent *Agent) *apis.FieldError {
+func validateStage(s Stage, parentAgent *Agent, parentVolumes []*corev1.Volume, kubeClient kubernetes.Interface, ns string) *apis.FieldError {
 	if len(s.Steps) == 0 && len(s.Stages) == 0 && len(s.Parallel) == 0 {
 		return apis.ErrMissingOneOf("steps", "stages", "parallel")
 	}
@@ -586,6 +596,13 @@ func validateStage(s Stage, parentAgent *Agent) *apis.FieldError {
 			Message: "Stage name must contain at least one ASCII letter",
 			Paths:   []string{"name"},
 		}
+	}
+
+	var volumes []*corev1.Volume
+
+	volumes = append(volumes, parentVolumes...)
+	if s.Options != nil && s.Options.RootOptions != nil && len(s.Options.Volumes) > 0 {
+		volumes = append(volumes, s.Options.Volumes...)
 	}
 
 	stageAgent := s.Agent.DeepCopy()
@@ -639,7 +656,7 @@ func validateStage(s Stage, parentAgent *Agent) *apis.FieldError {
 			return apis.ErrMultipleOneOf("steps", "stages", "parallel")
 		}
 		for i, stage := range s.Stages {
-			if err := validateStage(stage, parentAgent).ViaFieldIndex("stages", i); err != nil {
+			if err := validateStage(stage, parentAgent, volumes, kubeClient, ns).ViaFieldIndex("stages", i); err != nil {
 				return err
 			}
 		}
@@ -647,13 +664,13 @@ func validateStage(s Stage, parentAgent *Agent) *apis.FieldError {
 
 	if len(s.Parallel) > 0 {
 		for i, stage := range s.Parallel {
-			if err := validateStage(stage, parentAgent).ViaFieldIndex("parallel", i); err != nil {
+			if err := validateStage(stage, parentAgent, volumes, kubeClient, ns).ViaFieldIndex("parallel", i); err != nil {
 				return nil
 			}
 		}
 	}
 
-	return validateStageOptions(s.Options).ViaField("options")
+	return validateStageOptions(s.Options, volumes, kubeClient, ns).ViaField("options")
 }
 
 func moreThanOneAreTrue(vals ...bool) bool {
@@ -757,13 +774,13 @@ func validateLoop(l *Loop) *apis.FieldError {
 	return nil
 }
 
-func validateStages(stages []Stage, parentAgent *Agent) *apis.FieldError {
+func validateStages(stages []Stage, parentAgent *Agent, parentVolumes []*corev1.Volume, kubeClient kubernetes.Interface, ns string) *apis.FieldError {
 	if len(stages) == 0 {
 		return apis.ErrMissingField("stages")
 	}
 
 	for i, s := range stages {
-		if err := validateStage(s, parentAgent).ViaFieldIndex("stages", i); err != nil {
+		if err := validateStage(s, parentAgent, parentVolumes, kubeClient, ns).ViaFieldIndex("stages", i); err != nil {
 			return err
 		}
 	}
@@ -771,7 +788,7 @@ func validateStages(stages []Stage, parentAgent *Agent) *apis.FieldError {
 	return nil
 }
 
-func validateRootOptions(o *RootOptions) *apis.FieldError {
+func validateRootOptions(o *RootOptions, volumes []*corev1.Volume, kubeClient kubernetes.Interface, ns string) *apis.FieldError {
 	if o != nil {
 		if o.Timeout != nil {
 			if err := validateTimeout(o.Timeout); err != nil {
@@ -788,28 +805,47 @@ func validateRootOptions(o *RootOptions) *apis.FieldError {
 		}
 
 		for i, v := range o.Volumes {
-			if err := validateVolume(v).ViaFieldIndex("volumes", i); err != nil {
+			if err := validateVolume(v, kubeClient, ns).ViaFieldIndex("volumes", i); err != nil {
 				return err
 			}
 		}
 
-		return validateContainerOptions(o.ContainerOptions).ViaField("containerOptions")
+		return validateContainerOptions(o.ContainerOptions, volumes).ViaField("containerOptions")
 	}
 
 	return nil
 }
 
-func validateVolume(v *corev1.Volume) *apis.FieldError {
+func validateVolume(v *corev1.Volume, kubeClient kubernetes.Interface, ns string) *apis.FieldError {
 	if v != nil {
 		if v.Name == "" {
 			return apis.ErrMissingField("name")
+		}
+		if kubeClient != nil {
+			if v.Secret != nil {
+				_, err := kubeClient.CoreV1().Secrets(ns).Get(v.Secret.SecretName, metav1.GetOptions{})
+				if err != nil {
+					return &apis.FieldError{
+						Message: fmt.Sprintf("Secret %s does not exist, so cannot be used as a volume", v.Secret.SecretName),
+						Paths:   []string{"secretName"},
+					}
+				}
+			} else if v.PersistentVolumeClaim != nil {
+				_, err := kubeClient.CoreV1().PersistentVolumeClaims(ns).Get(v.PersistentVolumeClaim.ClaimName, metav1.GetOptions{})
+				if err != nil {
+					return &apis.FieldError{
+						Message: fmt.Sprintf("PVC %s does not exist, so cannot be used as a volume", v.PersistentVolumeClaim.ClaimName),
+						Paths:   []string{"claimName"},
+					}
+				}
+			}
 		}
 	}
 
 	return nil
 }
 
-func validateContainerOptions(c *corev1.Container) *apis.FieldError {
+func validateContainerOptions(c *corev1.Container, volumes []*corev1.Volume) *apis.FieldError {
 	if c != nil {
 		if len(c.Command) != 0 {
 			return &apis.FieldError{
@@ -853,12 +889,37 @@ func validateContainerOptions(c *corev1.Container) *apis.FieldError {
 				Paths:   []string{"tty"},
 			}
 		}
+		if len(c.VolumeMounts) > 0 {
+			for i, m := range c.VolumeMounts {
+				if !isVolumeMountValid(m, volumes) {
+					fieldErr := &apis.FieldError{
+						Message: fmt.Sprintf("Volume mount name %s not found in volumes for stage or pipeline", m.Name),
+						Paths:   []string{"name"},
+					}
+
+					return fieldErr.ViaFieldIndex("volumeMounts", i)
+				}
+			}
+		}
 	}
 
 	return nil
 }
 
-func validateStageOptions(o *StageOptions) *apis.FieldError {
+func isVolumeMountValid(mount corev1.VolumeMount, volumes []*corev1.Volume) bool {
+	foundVolume := false
+
+	for _, v := range volumes {
+		if v.Name == mount.Name {
+			foundVolume = true
+			break
+		}
+	}
+
+	return foundVolume
+}
+
+func validateStageOptions(o *StageOptions, volumes []*corev1.Volume, kubeClient kubernetes.Interface, ns string) *apis.FieldError {
 	if o != nil {
 		if err := validateStash(o.Stash); err != nil {
 			return err.ViaField("stash")
@@ -883,7 +944,7 @@ func validateStageOptions(o *StageOptions) *apis.FieldError {
 			}
 		}
 
-		return validateRootOptions(o.RootOptions)
+		return validateRootOptions(o.RootOptions, volumes, kubeClient, ns)
 	}
 
 	return nil
@@ -1293,9 +1354,11 @@ func stageToTask(params stageToTaskParams) (*transformedStage, error) {
 		t.SetDefaults(context.Background())
 
 		ws := &tektonv1alpha1.TaskResource{
-			Name:       "workspace",
-			TargetPath: params.parentParams.SourceDir,
-			Type:       tektonv1alpha1.PipelineResourceTypeGit,
+			ResourceDeclaration: tektonv1alpha1.ResourceDeclaration{
+				Name:       "workspace",
+				TargetPath: params.parentParams.SourceDir,
+				Type:       tektonv1alpha1.PipelineResourceTypeGit,
+			},
 		}
 
 		t.Spec.Inputs = &tektonv1alpha1.Inputs{
@@ -1303,12 +1366,7 @@ func stageToTask(params stageToTaskParams) (*transformedStage, error) {
 		}
 
 		t.Spec.Outputs = &tektonv1alpha1.Outputs{
-			Resources: []tektonv1alpha1.TaskResource{
-				{
-					Name: "workspace",
-					Type: tektonv1alpha1.PipelineResourceTypeGit,
-				},
-			},
+			Resources: []tektonv1alpha1.TaskResource{*ws},
 		}
 
 		// We don't want to dupe volumes for the Task if there are multiple steps
@@ -1492,9 +1550,9 @@ type generateStepsParams struct {
 	stepCounter     int
 }
 
-func generateSteps(params generateStepsParams) ([]corev1.Container, map[string]corev1.Volume, int, error) {
+func generateSteps(params generateStepsParams) ([]tektonv1alpha1.Step, map[string]corev1.Volume, int, error) {
 	volumes := make(map[string]corev1.Volume)
-	var steps []corev1.Container
+	var steps []tektonv1alpha1.Step
 
 	stepImage := params.inheritedAgent
 	if params.step.GetImage() != "" {
@@ -1576,6 +1634,16 @@ func generateSteps(params generateStepsParams) ([]corev1.Container, map[string]c
 		if params.stageParams.parentParams.InterpretMode {
 			c.WorkingDir = targetDir
 		} else {
+			var newCmd []string
+			var newArgs []string
+			for _, c := range c.Command {
+				newCmd = append(newCmd, ReplaceCurlyWithParen(c))
+			}
+			c.Command = newCmd
+			for _, a := range c.Args {
+				newArgs = append(newArgs, ReplaceCurlyWithParen(a))
+			}
+			c.Args = newArgs
 			c.WorkingDir = workingDir
 		}
 		params.stepCounter++
@@ -1589,7 +1657,9 @@ func generateSteps(params generateStepsParams) ([]corev1.Container, map[string]c
 		c.TTY = false
 		c.Env = scopedEnv(params.step.Env, scopedEnv(params.env, c.Env))
 
-		steps = append(steps, *c)
+		steps = append(steps, tektonv1alpha1.Step{
+			Container: *c,
+		})
 	} else if params.step.Loop != nil {
 		for i, v := range params.step.Loop.Values {
 			loopEnv := scopedEnv([]corev1.EnvVar{{Name: params.step.Loop.Variable, Value: v}}, params.env)
@@ -1648,7 +1718,6 @@ func PipelineRunName(pipelineIdentifier string, buildIdentifier string) string {
 type CRDsFromPipelineParams struct {
 	PipelineIdentifier string
 	BuildIdentifier    string
-	ResourceIdentifier string
 	Namespace          string
 	PodTemplates       map[string]*corev1.Pod
 	VersionsDir        string
@@ -1691,7 +1760,7 @@ func (j *ParsedPipeline) GenerateCRDs(params CRDsFromPipelineParams) (*tektonv1a
 		Spec: tektonv1alpha1.PipelineSpec{
 			Resources: []tektonv1alpha1.PipelineDeclaredResource{
 				{
-					Name: params.ResourceIdentifier,
+					Name: params.PipelineIdentifier,
 					Type: tektonv1alpha1.PipelineResourceTypeGit,
 				},
 			},
@@ -1804,7 +1873,7 @@ func createPipelineTasks(stage *transformedStage, resourceName string) []tektonv
 		return pTasks
 	} else {
 		pTask := tektonv1alpha1.PipelineTask{
-			Name: stage.Stage.taskName(), // TODO: What should this actually be named?
+			Name: stage.Stage.stageLabelName(),
 			TaskRef: tektonv1alpha1.TaskRef{
 				Name: stage.Task.Name,
 			},
@@ -2013,7 +2082,7 @@ func getDefaultTaskSpec(envs []corev1.EnvVar, parentContainer *corev1.Container,
 	}
 
 	return tektonv1alpha1.TaskSpec{
-		Steps: []corev1.Container{*childContainer},
+		Steps: []tektonv1alpha1.Step{{Container: *childContainer}},
 	}, nil
 }
 
@@ -2286,4 +2355,24 @@ func OverrideStep(step Step, override *PipelineOverride) []Step {
 	}
 
 	return []Step{step}
+}
+
+// StringParamValue generates a Tekton ArrayOrString value for the given string
+func StringParamValue(val string) tektonv1alpha1.ArrayOrString {
+	return tektonv1alpha1.ArrayOrString{
+		Type:      tektonv1alpha1.ParamTypeString,
+		StringVal: val,
+	}
+}
+
+// ReplaceCurlyWithParen replaces legacy "${inputs.params.foo}" with "$(inputs.params.foo)"
+func ReplaceCurlyWithParen(input string) string {
+	re := regexp.MustCompile(braceMatchingRegex)
+	matches := re.FindAllStringSubmatch(input, -1)
+	for _, m := range matches {
+		if len(m) >= 3 {
+			input = strings.ReplaceAll(input, m[0], "$("+m[3]+")")
+		}
+	}
+	return input
 }

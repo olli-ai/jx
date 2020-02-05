@@ -64,6 +64,13 @@ func (o *CommonOptions) LoadQuickStartsFromLocations(locations []v1.QuickStartLo
 			if kind == "" {
 				kind = gits.KindGitHub
 			}
+
+			// If this is a default quickstart location but there's no github.com credentials, skip and rely on the version stream alone.
+			server := config.GetOrCreateServer(gitURL)
+			userAuth := config.CurrentUser(server, o.InCluster())
+			if kube.IsDefaultQuickstartLocation(location) && (userAuth == nil || userAuth.IsInvalid()) {
+				continue
+			}
 			gitProvider, err := o.GitProviderForGitServerURL(gitURL, kind, "")
 			if err != nil {
 				return model, err

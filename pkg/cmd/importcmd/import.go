@@ -71,6 +71,7 @@ type ImportOptions struct {
 	DockerRegistryOrg       string
 	GitDetails              gits.CreateRepoData
 	DeployKind              string
+	DeployOptions           v1.DeployOptions
 	SchedulerName           string
 
 	DisableDotGitSearch   bool
@@ -87,15 +88,9 @@ type ImportOptions struct {
 	ImportMode            string
 	UseDefaultGit         bool
 	GithubAppInstalled    bool
+
+	reporter ImportReporter
 }
-
-const (
-	// DeployKindKnative for knative serve based deployments
-	DeployKindKnative = "knative"
-
-	// DeployKindDefault for default kubernetes Deployment + Service deployment kinds
-	DeployKindDefault = "default"
-)
 
 var (
 	importLong = templates.LongDesc(`
@@ -130,13 +125,19 @@ var (
 		jx import --github --org myname --all --filter foo 
 		`)
 
-	deployKinds = []string{DeployKindKnative, DeployKindDefault}
+	deployKinds = []string{opts.DeployKindKnative, opts.DeployKindDefault}
 
 	removeSourceRepositoryAnnotations = []string{"kubectl.kubernetes.io/last-applied-configuration", "jenkins.io/chart"}
 )
 
 // NewCmdImport the cobra command for jx import
 func NewCmdImport(commonOpts *opts.CommonOptions) *cobra.Command {
+	cmd, _ := NewCmdImportAndOptions(commonOpts)
+	return cmd
+}
+
+// NewCmdImportAndOptions creates the cobra command for jx import and the options
+func NewCmdImportAndOptions(commonOpts *opts.CommonOptions) (*cobra.Command, *ImportOptions) {
 	options := &ImportOptions{
 		CommonOptions: commonOpts,
 	}
@@ -157,8 +158,8 @@ func NewCmdImport(commonOpts *opts.CommonOptions) *cobra.Command {
 	cmd.Flags().BoolVarP(&options.SelectAll, "all", "", false, "If selecting projects to import from a Git provider this defaults to selecting them all")
 	cmd.Flags().StringVarP(&options.SelectFilter, "filter", "", "", "If selecting projects to import from a Git provider this filters the list of repositories")
 	options.AddImportFlags(cmd, false)
-
-	return cmd
+	options.Cmd = cmd
+	return cmd, options
 }
 
 func (options *ImportOptions) AddImportFlags(cmd *cobra.Command, createProject bool) {
@@ -186,6 +187,8 @@ func (options *ImportOptions) AddImportFlags(cmd *cobra.Command, createProject b
 	cmd.Flags().StringVarP(&options.ImportMode, "import-mode", "m", "", fmt.Sprintf("The import mode to use. Should be one of %s", strings.Join(v1.ImportModeStrings, ", ")))
 	cmd.Flags().BoolVarP(&options.UseDefaultGit, "use-default-git", "", false, "use default git account")
 	cmd.Flags().StringVarP(&options.DeployKind, "deploy-kind", "", "", fmt.Sprintf("The kind of deployment to use for the project. Should be one of %s", strings.Join(deployKinds, ", ")))
+	cmd.Flags().BoolVarP(&options.DeployOptions.Canary, opts.OptionCanary, "", false, "should we use canary rollouts (progressive delivery) by default for this application. e.g. using a Canary deployment via flagger. Requires the installation of flagger and istio/gloo in your cluster")
+	cmd.Flags().BoolVarP(&options.DeployOptions.HPA, opts.OptionHPA, "", false, "should we enable the Horizontal Pod Autoscaler for this application.")
 
 	opts.AddGitRepoOptionsArguments(cmd, &options.GitRepositoryOptions)
 }
@@ -262,7 +265,7 @@ func (options *ImportOptions) Run() error {
 			userAuth = config.CurrentUser(server, options.CommonOptions.InCluster())
 		} else if options.GitRepositoryOptions.Username != "" {
 			userAuth = config.GetOrCreateUserAuth(server.URL, options.GitRepositoryOptions.Username)
-			log.Logger().Infof("Using Git user name: %s", options.GitRepositoryOptions.Username)
+			options.GetReporter().UsingGitUserName(options.GitRepositoryOptions.Username)
 		} else {
 			// Get the org in case there is more than one user auth on the server and batchMode is true
 			org := options.getOrganisationOrCurrentUser()
@@ -482,6 +485,19 @@ func (options *ImportOptions) ImportProjectsFromGitHub() error {
 	return nil
 }
 
+// GetReporter returns the reporter interface
+func (options *ImportOptions) GetReporter() ImportReporter {
+	if options.reporter == nil {
+		options.reporter = &LogImportReporter{}
+	}
+	return options.reporter
+}
+
+// SetReporter overrides the reporter interface
+func (options *ImportOptions) SetReporter(reporter ImportReporter) {
+	options.reporter = reporter
+}
+
 // DraftCreate creates a draft
 func (options *ImportOptions) DraftCreate() error {
 	// TODO this is a workaround of this draft issue:
@@ -520,6 +536,7 @@ func (options *ImportOptions) DraftCreate() error {
 		return err
 	}
 
+	err = options.modifyDeployKind()
 	err = options.modifyDeployKind()
 	if err != nil {
 		return err
@@ -678,7 +695,8 @@ func (options *ImportOptions) CreateNewRemoteRepository() error {
 	if err != nil {
 		return err
 	}
-	log.Logger().Infof("Pushed Git repository to %s\n", util.ColorInfo(repo.HTMLURL))
+	repoURL := repo.HTMLURL
+	options.GetReporter().PushedGitRepository(repoURL)
 
 	githubAppMode, err := options.IsGitHubAppMode()
 	if err != nil {
@@ -783,7 +801,7 @@ func (options *ImportOptions) DiscoverGit() error {
 		}
 		if root != "" {
 			if root != options.Dir {
-				log.Logger().Infof("Importing from directory %s as we found a .git folder there", root)
+				options.GetReporter().Trace("Importing from directory %s as we found a .git folder there", root)
 			}
 			options.Dir = root
 			options.GitConfDir = gitConf
@@ -798,7 +816,7 @@ func (options *ImportOptions) DiscoverGit() error {
 
 	// lets prompt the user to initialise the Git repository
 	if !options.BatchMode {
-		log.Logger().Infof("The directory %s is not yet using git", util.ColorInfo(dir))
+		options.GetReporter().Trace("The directory %s is not yet using git", util.ColorInfo(dir))
 		flag := false
 		prompt := &survey.Confirm{
 			Message: "Would you like to initialise git now?",
@@ -852,7 +870,7 @@ func (options *ImportOptions) DiscoverGit() error {
 	if err != nil {
 		return err
 	}
-	log.Logger().Infof("\nGit repository created")
+	options.GetReporter().GitRepositoryCreated()
 	return nil
 }
 
@@ -1057,12 +1075,11 @@ func (options *ImportOptions) addProwConfig(gitURL string, gitKind string) error
 			if err != nil {
 				return errors.Wrapf(err, "failed to create Pull Request on the development environment git repository %s", devGitURL)
 			}
-			info := util.ColorInfo
 			prURL := ""
 			if pro.Results != nil && pro.Results.PullRequest != nil {
 				prURL = pro.Results.PullRequest.URL
 			}
-			log.Logger().Infof("created pull request %s on the development git repository %s", info(prURL), info(devGitURL))
+			options.GetReporter().CreatedDevRepoPullRequest(prURL, devGitURL)
 		}
 
 		err = options.GenerateProwConfig(currentNamespace, devEnv)
@@ -1083,7 +1100,7 @@ func (options *ImportOptions) addProwConfig(gitURL string, gitKind string) error
 		startBuildOptions.Args = []string{fmt.Sprintf("%s/%s/%s", gitInfo.Organisation, gitInfo.Name, opts.MasterBranch)}
 		err = startBuildOptions.Run()
 		if err != nil {
-			return fmt.Errorf("failed to start pipeline build")
+			return fmt.Errorf("failed to start pipeline build: %s", err)
 		}
 	}
 
@@ -1176,8 +1193,8 @@ func (options *ImportOptions) ensureDockerRepositoryExists() error {
 // ReplacePlaceholders replaces app name, git server name, git org, and docker registry org placeholders
 func (options *ImportOptions) ReplacePlaceholders(gitServerName, dockerRegistryOrg string) error {
 	options.Organisation = naming.ToValidName(strings.ToLower(options.Organisation))
-	log.Logger().Infof("replacing placeholders in directory %s", options.Dir)
-	log.Logger().Infof("app name: %s, git server: %s, org: %s, Docker registry org: %s", options.AppName, gitServerName, options.Organisation, dockerRegistryOrg)
+	options.GetReporter().Trace("replacing placeholders in directory %s", options.Dir)
+	options.GetReporter().Trace("app name: %s, git server: %s, org: %s, Docker registry org: %s", options.AppName, gitServerName, options.Organisation, dockerRegistryOrg)
 
 	ignore, err := gitignore.NewRepository(options.Dir)
 	if err != nil {
@@ -1224,16 +1241,16 @@ func (options *ImportOptions) skipPathForReplacement(path string, fi os.FileInfo
 	matchIgnore := match != nil && match.Ignore() //Defaults to including if match == nil
 	if fi.IsDir() {
 		if matchIgnore || fi.Name() == ".git" {
-			log.Logger().Infof("skipping directory %q", path)
+			options.GetReporter().Trace("skipping directory %q", path)
 			return true, filepath.SkipDir
 		}
 	} else if matchIgnore {
-		log.Logger().Infof("skipping ignored file %q", path)
+		options.GetReporter().Trace("skipping ignored file %q", path)
 		return true, nil
 	}
 	// Don't process nor follow symlinks
 	if (fi.Mode() & os.ModeSymlink) == os.ModeSymlink {
-		log.Logger().Infof("skipping symlink file %q", path)
+		options.GetReporter().Trace("skipping symlink file %q", path)
 		return true, nil
 	}
 	return false, nil
@@ -1405,7 +1422,7 @@ func (options *ImportOptions) fixDockerIgnoreFile() error {
 				if err != nil {
 					return err
 				}
-				log.Logger().Infof("Removed old `Dockerfile` entry from %s", util.ColorInfo(filename))
+				options.GetReporter().Trace("Removed old `Dockerfile` entry from %s", util.ColorInfo(filename))
 			}
 		}
 	}
@@ -1535,8 +1552,22 @@ func (options *ImportOptions) DefaultsFromTeamSettings() error {
 	if err != nil {
 		return err
 	}
+	return options.DefaultValuesFromTeamSettings(settings)
+}
+
+// DefaultValuesFromTeamSettings defaults the repository options from the given team settings
+func (options *ImportOptions) DefaultValuesFromTeamSettings(settings *v1.TeamSettings) error {
 	if options.DeployKind == "" {
 		options.DeployKind = settings.DeployKind
+	}
+
+	// lets override any deploy options from the team settings if they are not specified
+	teamDeployOptions := settings.GetDeployOptions()
+	if !options.FlagChanged(opts.OptionCanary) {
+		options.DeployOptions.Canary = teamDeployOptions.Canary
+	}
+	if !options.FlagChanged(opts.OptionHPA) {
+		options.DeployOptions.HPA = teamDeployOptions.HPA
 	}
 	if options.Organisation == "" {
 		options.Organisation = settings.Organisation
@@ -1561,7 +1592,7 @@ func (options *ImportOptions) allDraftPacks() ([]string, error) {
 	initOpts := initcmd.InitOptions{
 		CommonOptions: options.CommonOptions,
 	}
-	log.Logger().Info("Getting latest packs ...")
+	log.Logger().Debug("Getting latest packs ...")
 	dir, _, err := initOpts.InitBuildPacks(nil)
 	if err != nil {
 		return nil, err
@@ -1619,13 +1650,18 @@ func (options *ImportOptions) modifyDeployKind() error {
 	if deployKind == "" {
 		return nil
 	}
+	dopts := options.DeployOptions
 
-	eo := &edit.EditDeployKindOptions{}
 	copy := *options.CommonOptions
-	eo.CommonOptions = &copy
-	eo.Args = []string{deployKind}
+	cmd, eo := edit.NewCmdEditDeployKindAndOption(&copy)
 	eo.Dir = options.Dir
-	err := eo.Run()
+
+	// lets parse the CLI arguments so that the flags are marked as specified to force them to be overridden
+	err := cmd.Flags().Parse(edit.ToDeployArguments(opts.OptionKind, deployKind, dopts.Canary, dopts.HPA))
+	if err != nil {
+		return err
+	}
+	err = eo.Run()
 	if err != nil {
 		return errors.Wrapf(err, "failed to modify the deployment kind to %s", deployKind)
 	}

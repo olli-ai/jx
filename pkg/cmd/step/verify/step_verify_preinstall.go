@@ -4,9 +4,13 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/jenkins-x/jx/pkg/cloud/amazon/session"
+	"github.com/jenkins-x/jx/pkg/prow"
+	"sigs.k8s.io/yaml"
 
 	"github.com/jenkins-x/jx/pkg/boot"
 	"github.com/jenkins-x/jx/pkg/cloud"
@@ -37,16 +41,17 @@ import (
 // StepVerifyPreInstallOptions contains the command line flags
 type StepVerifyPreInstallOptions struct {
 	StepVerifyOptions
-	Debug                bool
-	Dir                  string
-	LazyCreate           bool
-	DisableVerifyHelm    bool
-	LazyCreateFlag       string
-	Namespace            string
-	ProviderValuesDir    string
-	TestKanikoSecretData string
-	TestVeleroSecretData string
-	WorkloadIdentity     bool
+	Debug                 bool
+	Dir                   string
+	LazyCreate            bool
+	DisableVerifyHelm     bool
+	DisableVerifyPackages bool
+	LazyCreateFlag        string
+	Namespace             string
+	ProviderValuesDir     string
+	TestKanikoSecretData  string
+	TestVeleroSecretData  string
+	WorkloadIdentity      bool
 }
 
 // NewCmdStepVerifyPreInstall creates the `jx step verify pod` command
@@ -77,6 +82,8 @@ func NewCmdStepVerifyPreInstall(commonOpts *opts.CommonOptions) *cobra.Command {
 	cmd.Flags().StringVarP(&options.Namespace, "namespace", "", "", "the namespace that Jenkins X will be booted into. If not specified it defaults to $DEPLOY_NAMESPACE")
 	cmd.Flags().StringVarP(&options.ProviderValuesDir, "provider-values-dir", "", "", "The optional directory of kubernetes provider specific files")
 	cmd.Flags().BoolVarP(&options.WorkloadIdentity, "workload-identity", "", false, "Enable this if using GKE Workload Identity to avoid reconnecting to the Cluster.")
+	cmd.Flags().BoolVarP(&options.DisableVerifyPackages, "disable-verify-packages", "", false, "Disable packages verification, helpful when testing different package versions.")
+	cmd.Flags().BoolVarP(&options.DisableVerifyHelm, "disable-verify-helm", "", false, "Disable Helm verification, helpful when testing different Helm versions.")
 
 	return cmd
 }
@@ -85,6 +92,11 @@ func NewCmdStepVerifyPreInstall(commonOpts *opts.CommonOptions) *cobra.Command {
 func (o *StepVerifyPreInstallOptions) Run() error {
 	info := util.ColorInfo
 	requirements, requirementsFileName, err := config.LoadRequirementsConfig(o.Dir)
+	if err != nil {
+		return err
+	}
+
+	err = o.ConfigureCommonOptions(requirements)
 	if err != nil {
 		return err
 	}
@@ -149,7 +161,6 @@ func (o *StepVerifyPreInstallOptions) Run() error {
 	if err != nil {
 		return err
 	}
-
 	no := &namespace.NamespaceOptions{}
 	no.CommonOptions = o.CommonOptions
 	no.Args = []string{ns}
@@ -162,30 +173,29 @@ func (o *StepVerifyPreInstallOptions) Run() error {
 	po := &StepVerifyPackagesOptions{}
 	po.CommonOptions = o.CommonOptions
 	po.Packages = []string{"kubectl", "git", "helm"}
-	err = po.Run()
-	if err != nil {
-		return err
+	if !o.DisableVerifyPackages {
+		err = po.Run()
+		if err != nil {
+			return err
+		}
+		log.Logger().Info("\n")
 	}
-	log.Logger().Info("\n")
 
 	err = o.VerifyInstallConfig(kubeClient, ns, requirements, requirementsFileName)
 	if err != nil {
 		return err
 	}
-
 	err = o.verifyStorage(requirements, requirementsFileName)
 	if err != nil {
 		return err
 	}
 	log.Logger().Info("\n")
-
-	if !o.DisableVerifyHelm {
+	if !o.DisableVerifyHelm && !requirements.Helmfile {
 		err = o.verifyHelm(ns)
 		if err != nil {
 			return err
 		}
 	}
-
 	if requirements.Kaniko {
 		if requirements.Cluster.Provider == cloud.GKE {
 			log.Logger().Infof("Validating Kaniko secret in namespace %s", info(ns))
@@ -221,7 +231,7 @@ func (o *StepVerifyPreInstallOptions) Run() error {
 
 					err = o.lazyCreateVeleroSecret(requirements, vns)
 					if err != nil {
-						return errors.Wrapf(err, "failed to lazily create the kaniko secret in: %s", vns)
+						return errors.Wrapf(err, "failed to lazily create the velero secret in: %s", vns)
 					}
 					// lets rerun the verify step to ensure its all sorted now
 					err = o.validateVelero(vns)
@@ -243,7 +253,7 @@ func (o *StepVerifyPreInstallOptions) Run() error {
 	}
 
 	if requirements.Cluster.Provider == cloud.EKS && o.LazyCreate {
-		if !cluster.IsInCluster() {
+		if !cluster.IsInCluster() || os.Getenv("OVERRIDE_IRSA_IN_CLUSTER") == "true" {
 			log.Logger().Info("Attempting to lazily create the IAM Role for Service Accounts permissions")
 			err = amazon.EnableIRSASupportInCluster(requirements)
 			if err != nil {
@@ -258,7 +268,7 @@ func (o *StepVerifyPreInstallOptions) Run() error {
 		}
 	}
 
-	// Lets update the TeamSettings with the VersionStream data from the jx-requirements.yaml file so we make sure
+	// Lets update the TeamSettings with the VersionStream data from the jx-requirements.yml file so we make sure
 	// we are upgrading with the latest versions
 	log.Logger().Infof("Cluster looks good, you are ready to '%s' now!", info("jx boot"))
 	fmt.Println()
@@ -489,9 +499,11 @@ func (o *StepVerifyPreInstallOptions) gatherRequirements(requirements *config.Re
 		}
 	}
 
-	if requirements.Cluster.Provider != cloud.GKE {
+	if requirements.Cluster.Provider != cloud.GKE && requirements.Cluster.Provider != cloud.EKS {
 		// lets check we want to try installation as we've only tested on GKE at the moment
-		if !o.showProvideFeedbackMessage() {
+		if answer, err := o.showProvideFeedbackMessage(); err != nil {
+			return requirements, err
+		} else if !answer {
 			return requirements, errors.New("finishing execution")
 		}
 	}
@@ -511,7 +523,10 @@ func (o *StepVerifyPreInstallOptions) gatherRequirements(requirements *config.Re
 			}
 			if currentClusterName != "" && currentProject != "" && currentZone != "" {
 				log.Logger().Infof("Currently connected cluster is %s in %s in project %s", util.ColorInfo(currentClusterName), util.ColorInfo(currentZone), util.ColorInfo(currentProject))
-				autoAcceptDefaults = util.Confirm(fmt.Sprintf("Do you want to jx boot the %s cluster?", util.ColorInfo(currentClusterName)), true, "Enter Y to use the currently connected cluster or enter N to specify a different cluster", o.GetIOFileHandles())
+				autoAcceptDefaults, err = util.Confirm(fmt.Sprintf("Do you want to jx boot the %s cluster?", util.ColorInfo(currentClusterName)), true, "Enter Y to use the currently connected cluster or enter N to specify a different cluster", o.GetIOFileHandles())
+				if err != nil {
+					return nil, err
+				}
 			} else {
 				log.Logger().Infof("Enter the cluster you want to jx boot")
 			}
@@ -574,7 +589,10 @@ func (o *StepVerifyPreInstallOptions) gatherRequirements(requirements *config.Re
 			if currentClusterName != "" && currentRegion != "" {
 				log.Logger().Infof("")
 				log.Logger().Infof("Currently connected cluster is %s in region %s", util.ColorInfo(currentClusterName), util.ColorInfo(currentRegion))
-				autoAcceptDefaults = util.Confirm(fmt.Sprintf("Do you want to jx boot the %s cluster?", util.ColorInfo(currentClusterName)), true, "Enter Y to use the currently connected cluster or enter N to specify a different cluster", o.GetIOFileHandles())
+				autoAcceptDefaults, err = util.Confirm(fmt.Sprintf("Do you want to jx boot the %s cluster?", util.ColorInfo(currentClusterName)), true, "Enter Y to use the currently connected cluster or enter N to specify a different cluster", o.GetIOFileHandles())
+				if err != nil {
+					return nil, err
+				}
 			} else {
 				log.Logger().Infof("Enter the cluster you want to jx boot")
 			}
@@ -638,16 +656,46 @@ func (o *StepVerifyPreInstallOptions) gatherRequirements(requirements *config.Re
 		requirements.VersionStream.Ref = ref
 	}
 
-	err = requirements.SaveConfig(requirementsFileName)
+	err = o.SaveConfig(requirements, requirementsFileName)
 	if err != nil {
 		return nil, errors.Wrap(err, "error saving requirements file")
+	}
+
+	err = o.writeOwnersFile(requirements)
+	if err != nil {
+		return nil, errors.Wrapf(err, "writing approvers to OWNERS file in %s", o.Dir)
 	}
 
 	return requirements, nil
 }
 
+func (o *StepVerifyPreInstallOptions) writeOwnersFile(requirements *config.RequirementsConfig) error {
+	if len(requirements.Cluster.DevEnvApprovers) > 0 {
+		path := filepath.Join(o.Dir, "OWNERS")
+		filename, err := filepath.Abs(path)
+		if err != nil {
+			return errors.Wrapf(err, "failed to resolve path %s", path)
+		}
+		data := prow.Owners{}
+		for _, approver := range requirements.Cluster.DevEnvApprovers {
+			data.Approvers = append(data.Approvers, approver)
+			data.Reviewers = append(data.Reviewers, approver)
+		}
+		ownersYaml, err := yaml.Marshal(data)
+		if err != nil {
+			return err
+		}
+		err = ioutil.WriteFile(filename, ownersYaml, 0644)
+		if err != nil {
+			return err
+		}
+		log.Logger().Infof("writing the following to the OWNERS file for the development environment repository:\n%s", string(ownersYaml))
+	}
+	return nil
+}
+
 func (o *StepVerifyPreInstallOptions) gatherGitRequirements(requirements *config.RequirementsConfig) error {
-	requirements.Cluster.EnvironmentGitOwner = strings.TrimSpace(strings.ToLower(requirements.Cluster.EnvironmentGitOwner))
+	requirements.Cluster.EnvironmentGitOwner = strings.TrimSpace(requirements.Cluster.EnvironmentGitOwner)
 
 	// lets fix up any missing or incorrect git kinds for public git servers
 	if gits.IsGitHubServerURL(requirements.Cluster.GitServer) {
@@ -671,7 +719,7 @@ func (o *StepVerifyPreInstallOptions) gatherGitRequirements(requirements *config
 		}
 
 		if requirements.Cluster.EnvironmentGitPublic {
-			log.Logger().Infof("Environment repos will be %s, if you want to create %s environment repos, please set %s to %s jx-requirements.yaml", util.ColorInfo("public"), util.ColorInfo("private"), util.ColorInfo("environmentGitPublic"), util.ColorInfo("false"))
+			log.Logger().Infof("Environment repos will be %s, if you want to create %s environment repos, please set %s to %s jx-requirements.yml", util.ColorInfo("public"), util.ColorInfo("private"), util.ColorInfo("environmentGitPublic"), util.ColorInfo("false"))
 		} else {
 			err = o.verifyPrivateRepos(requirements)
 			if err != nil {
@@ -679,11 +727,27 @@ func (o *StepVerifyPreInstallOptions) gatherGitRequirements(requirements *config
 			}
 		}
 	}
+	if len(requirements.Cluster.DevEnvApprovers) == 0 && !o.BatchMode {
+		approversString, err := util.PickValue(
+			"Comma-separated git provider usernames of approvers for development environment repository",
+			"",
+			true,
+			"Pull requests to the development environment repository require approval by one or more "+
+				"users, specified in the 'OWNERS' file in the repository. Please specify a comma-separated "+
+				"list of usernames for your Git provider to be used as approvers.",
+			o.GetIOFileHandles())
+		if err != nil {
+			return errors.Wrap(err, "configuring approvers for development environment repository")
+		}
+		for _, a := range strings.Split(approversString, ",") {
+			requirements.Cluster.DevEnvApprovers = append(requirements.Cluster.DevEnvApprovers, strings.TrimSpace(a))
+		}
+	}
 	return nil
 }
 
 func (o *StepVerifyPreInstallOptions) verifyPrivateRepos(requirements *config.RequirementsConfig) error {
-	log.Logger().Infof("Environment repos will be %s, if you want to create %s environment repos, please set %s to %s in jx-requirements.yaml", util.ColorInfo("private"), util.ColorInfo("public"), util.ColorInfo("environmentGitPublic"), util.ColorInfo("true"))
+	log.Logger().Infof("Environment repos will be %s, if you want to create %s environment repos, please set %s to %s in jx-requirements.yml", util.ColorInfo("private"), util.ColorInfo("public"), util.ColorInfo("environmentGitPublic"), util.ColorInfo("true"))
 
 	if o.BatchMode {
 		return nil
@@ -692,8 +756,9 @@ func (o *StepVerifyPreInstallOptions) verifyPrivateRepos(requirements *config.Re
 	if requirements.Cluster.GitKind == "github" {
 		message := fmt.Sprintf("If '%s' is an GitHub organisation it needs to have a paid subscription to create private repos. Do you wish to continue?", requirements.Cluster.EnvironmentGitOwner)
 		help := fmt.Sprint("GitHub organisation on a free plan cannot create private repositories. You either need to upgrade, use a GitHub user instead or use public repositories.")
-		confirmed := util.Confirm(message, false, help, o.GetIOFileHandles())
-		if !confirmed {
+		if answer, err := util.Confirm(message, false, help, o.GetIOFileHandles()); err != nil {
+			return err
+		} else if !answer {
 			return errors.New("cannot continue without completed git requirements")
 		}
 	}
@@ -742,8 +807,9 @@ func (o *StepVerifyPreInstallOptions) verifyTLS(requirements *config.Requirement
 
 			message := fmt.Sprintf("Do you wish to continue?")
 			help := fmt.Sprintf("Jenkins X needs TLS enabled to send secrets securely. We strongly recommend enabling TLS.")
-			value := util.Confirm(message, false, help, o.GetIOFileHandles())
-			if !value {
+			if answer, err := util.Confirm(message, false, help, o.GetIOFileHandles()); err != nil {
+				return err
+			} else if !answer {
 				return errors.Errorf("cannot continue because TLS is not enabled.")
 			}
 		}
@@ -796,7 +862,7 @@ func (o *StepVerifyPreInstallOptions) verifyStorageEntry(requirements *config.Re
 		if value != "" {
 			storageEntryConfig.URL = value
 
-			err = requirements.SaveConfig(requirementsFileName)
+			err = o.SaveConfig(requirements, requirementsFileName)
 			if err != nil {
 				return errors.Wrapf(err, "failed to save changes to file: %s", requirementsFileName)
 			}
@@ -882,7 +948,7 @@ func (o *StepVerifyPreInstallOptions) verifyIngress(requirements *config.Require
 	if requirements.Ingress.IsAutoDNSDomain() && !requirements.Ingress.IgnoreLoadBalancer {
 		log.Logger().Infof("Clearing the domain %s as when using auto-DNS domains we need to regenerate to ensure its always accurate in case the cluster or ingress service is recreated", util.ColorInfo(domain))
 		requirements.Ingress.Domain = ""
-		err := requirements.SaveConfig(requirementsFileName)
+		err := o.SaveConfig(requirements, requirementsFileName)
 		if err != nil {
 			return errors.Wrapf(err, "failed to save changes to file: %s", requirementsFileName)
 		}
@@ -902,9 +968,57 @@ func (o *StepVerifyPreInstallOptions) ValidateRequirements(requirements *config.
 	}
 	if requirements.Repository == config.RepositoryTypeBucketRepo && requirements.Cluster.ChartRepository == "" {
 		requirements.Cluster.ChartRepository = "http://bucketrepo/bucketrepo/charts/"
-		err := requirements.SaveConfig(fileName)
+		err := o.SaveConfig(requirements, fileName)
 		if err != nil {
 			return errors.Wrapf(err, "failed to save changes to file: %s", fileName)
+		}
+	}
+
+	// lets verify that we have a repository name defined for every environment
+	modified := false
+	for i, env := range requirements.Environments {
+		if env.Repository == "" {
+			clusterName := requirements.Cluster.ClusterName
+			if clusterName != "" {
+				clusterName = clusterName + "-"
+			}
+			repoName := "environment-" + clusterName + env.Key
+			requirements.Environments[i].Repository = naming.ToValidName(repoName)
+			modified = true
+		}
+	}
+	if modified {
+		err := o.SaveConfig(requirements, fileName)
+		if err != nil {
+			return errors.Wrapf(err, "failed to save changes to file: %s", fileName)
+		}
+	}
+	return nil
+}
+
+// SaveConfig saves the configuration file to the given project directory
+func (o *StepVerifyPreInstallOptions) SaveConfig(c *config.RequirementsConfig, fileName string) error {
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		return err
+	}
+	err = ioutil.WriteFile(fileName, data, util.DefaultWritePermissions)
+	if err != nil {
+		return errors.Wrapf(err, "failed to save file %s", fileName)
+	}
+
+	if c.Helmfile {
+		y := config.RequirementsValues{
+			RequirementsConfig: c,
+		}
+		data, err = yaml.Marshal(y)
+		if err != nil {
+			return err
+		}
+
+		err = ioutil.WriteFile(path.Join(path.Dir(fileName), config.RequirementsValuesFileName), data, util.DefaultWritePermissions)
+		if err != nil {
+			return errors.Wrapf(err, "failed to save file %s", config.RequirementsValuesFileName)
 		}
 	}
 	return nil
@@ -922,12 +1036,12 @@ func modifyMapIfNotBlank(m map[string]string, key string, value string) {
 	}
 }
 
-func (o *StepVerifyPreInstallOptions) showProvideFeedbackMessage() bool {
-	log.Logger().Info("jx boot has only been validated on GKE, we'd love feedback and contributions for other Kubernetes providers")
+func (o *StepVerifyPreInstallOptions) showProvideFeedbackMessage() (bool, error) {
+	log.Logger().Info("jx boot has only been validated on GKE and EKS, we'd love feedback and contributions for other Kubernetes providers")
 	if !o.BatchMode {
 		return util.Confirm("Continue execution anyway?",
 			true, "", o.GetIOFileHandles())
 	}
 	log.Logger().Info("Running in Batch Mode, execution will continue")
-	return true
+	return true, nil
 }

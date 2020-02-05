@@ -1,3 +1,5 @@
+// +build unit
+
 // +build integration
 
 // TODO these are not supposed to be integration tests but there was a mistaken mis-usage of go-git which means they
@@ -80,6 +82,11 @@ func TestAddAppForGitOps(t *testing.T) {
 			DevEnv:     testOptions.DevEnv,
 			HelmUpdate: true, // Flag default when run on CLI
 		}
+		envDir, err := o.CommonOptions.EnvironmentsDir()
+		assert.NoError(r, err)
+		devEnvDir := testOptions.GetFullDevEnvDir(envDir)
+		o.CloneDir = devEnvDir
+
 		helm_test.StubFetchChart(name, "", kube.DefaultChartMuseumURL, &chart.Chart{
 			Metadata: &chart.Metadata{
 				Name:        name,
@@ -96,9 +103,6 @@ func TestAddAppForGitOps(t *testing.T) {
 		assert.Equal(r, fmt.Sprintf("Add %s %s", name, version), pr.Title)
 		assert.Equal(r, fmt.Sprintf("Add app %s %s", name, version), pr.Body)
 		// Validate the branch name
-		envDir, err := o.CommonOptions.EnvironmentsDir()
-		assert.NoError(r, err)
-		devEnvDir := testOptions.GetFullDevEnvDir(envDir)
 		branchName, err := o.Git().Branch(devEnvDir)
 		assert.NoError(r, err)
 		assert.Equal(r, fmt.Sprintf("add-app-%s-%s", name, version), branchName)
@@ -153,6 +157,11 @@ func TestAddAppForGitOpsWithShortName(t *testing.T) {
 			DevEnv:     testOptions.DevEnv,
 			HelmUpdate: true, // Flag default when run on CLI
 		}
+		envDir, err := o.CommonOptions.EnvironmentsDir()
+		assert.NoError(r, err)
+		devEnvDir := testOptions.GetFullDevEnvDir(envDir)
+		o.CloneDir = devEnvDir
+
 		pegomock.When(testOptions.MockHelmer.ListRepos()).ThenReturn(
 			map[string]string{
 				"repo1": kube.DefaultChartMuseumURL,
@@ -181,9 +190,6 @@ func TestAddAppForGitOpsWithShortName(t *testing.T) {
 		assert.Equal(r, fmt.Sprintf("Add %s %s", name, version), pr.Title)
 		assert.Equal(r, fmt.Sprintf("Add app %s %s", name, version), pr.Body)
 		// Validate the branch name
-		envDir, err := o.CommonOptions.EnvironmentsDir()
-		assert.NoError(r, err)
-		devEnvDir := testOptions.GetFullDevEnvDir(envDir)
 		branchName, err := o.Git().Branch(devEnvDir)
 		assert.NoError(r, err)
 		assert.Equal(r, fmt.Sprintf("add-app-%s-%s", name, version), branchName)
@@ -291,6 +297,7 @@ func TestAddAppWithSecrets(t *testing.T) {
 			pegomock.AnyBool(),
 			pegomock.AnyStringSlice(),
 			pegomock.AnyStringSlice(),
+			pegomock.AnyStringSlice(),
 			pegomock.EqString(kube.DefaultChartMuseumURL),
 			pegomock.AnyString(),
 			pegomock.AnyString())).
@@ -348,6 +355,7 @@ func TestAddAppWithSecrets(t *testing.T) {
 				pegomock.AnyInt(),
 				pegomock.AnyBool(),
 				pegomock.AnyBool(),
+				pegomock.AnyStringSlice(),
 				pegomock.AnyStringSlice(),
 				pegomock.AnyStringSlice(),
 				pegomock.EqString(kube.DefaultChartMuseumURL),
@@ -436,6 +444,7 @@ func TestAddAppWithDefaults(t *testing.T) {
 			pegomock.AnyBool(),
 			pegomock.AnyStringSlice(),
 			pegomock.AnyStringSlice(),
+			pegomock.AnyStringSlice(),
 			pegomock.EqString(kube.DefaultChartMuseumURL),
 			pegomock.AnyString(),
 			pegomock.AnyString())).
@@ -478,6 +487,7 @@ func TestAddAppWithDefaults(t *testing.T) {
 				pegomock.AnyInt(),
 				pegomock.AnyBool(),
 				pegomock.AnyBool(),
+				pegomock.AnyStringSlice(),
 				pegomock.AnyStringSlice(),
 				pegomock.AnyStringSlice(),
 				pegomock.EqString(kube.DefaultChartMuseumURL),
@@ -604,6 +614,10 @@ func TestAddAppForGitOpsWithSecrets(t *testing.T) {
 		}
 		o.Args = []string{name}
 		o.BatchMode = false
+		envDir, err := o.CommonOptions.EnvironmentsDir()
+		assert.NoError(r, err)
+		devEnvDir := testOptions.GetFullDevEnvDir(envDir)
+		o.CloneDir = devEnvDir
 
 		helm_test.StubFetchChart(name, "", kube.DefaultChartMuseumURL, &chart.Chart{
 			Metadata: &chart.Metadata{
@@ -647,9 +661,7 @@ func TestAddAppForGitOpsWithSecrets(t *testing.T) {
 		r.Logf(expect.StripTrailingEmptyLines(console.CurrentState()))
 
 		// Validate that the secret reference is generated
-		envDir, err := o.CommonOptions.EnvironmentsDir()
-		assert.NoError(r, err)
-		valuesFromPrPath := filepath.Join(testOptions.GetFullDevEnvDir(envDir), name, helm.ValuesFileName)
+		valuesFromPrPath := filepath.Join(devEnvDir, name, helm.ValuesFileName)
 		_, err = os.Stat(valuesFromPrPath)
 		assert.NoError(r, err)
 		data, err := ioutil.ReadFile(valuesFromPrPath)
@@ -713,6 +725,7 @@ func TestAddApp(t *testing.T) {
 			pegomock.AnyInt(),
 			pegomock.AnyBool(),
 			pegomock.AnyBool(),
+			pegomock.AnyStringSlice(),
 			pegomock.AnyStringSlice(),
 			pegomock.AnyStringSlice(),
 			pegomock.EqString(kube.DefaultChartMuseumURL),
@@ -786,6 +799,7 @@ func TestAddAppWithShortName(t *testing.T) {
 			pegomock.AnyBool(),
 			pegomock.AnyStringSlice(),
 			pegomock.AnyStringSlice(),
+			pegomock.AnyStringSlice(),
 			pegomock.EqString(kube.DefaultChartMuseumURL),
 			pegomock.AnyString(),
 			pegomock.AnyString())
@@ -843,6 +857,7 @@ func TestAddAppFromPath(t *testing.T) {
 			pegomock.AnyInt(),
 			pegomock.AnyBool(),
 			pegomock.AnyBool(),
+			pegomock.AnyStringSlice(),
 			pegomock.AnyStringSlice(),
 			pegomock.AnyStringSlice(),
 			pegomock.AnyString(),
@@ -906,6 +921,7 @@ func TestAddLatestApp(t *testing.T) {
 			pegomock.AnyBool(),
 			pegomock.AnyStringSlice(),
 			pegomock.AnyStringSlice(),
+			pegomock.AnyStringSlice(),
 			pegomock.EqString(kube.DefaultChartMuseumURL),
 			pegomock.AnyString(),
 			pegomock.AnyString())
@@ -953,12 +969,13 @@ func TestAddAppWithValuesFileForGitOps(t *testing.T) {
 		ValuesFiles: []string{file.Name()},
 	}
 	o.Args = []string{name}
-	err = o.Run()
-	assert.NoError(t, err)
-	// Validate that the values.yaml file is in the right place
 	envDir, err := o.CommonOptions.EnvironmentsDir()
 	assert.NoError(t, err)
 	devEnvDir := testOptions.GetFullDevEnvDir(envDir)
+	o.CloneDir = devEnvDir
+	err = o.Run()
+	assert.NoError(t, err)
+	// Validate that the values.yaml file is in the right place
 	valuesFromPrPath := filepath.Join(devEnvDir, name, helm.ValuesFileName)
 	_, err = os.Stat(valuesFromPrPath)
 	assert.NoError(t, err)
@@ -1009,6 +1026,10 @@ func TestAddAppWithReadmeForGitOps(t *testing.T) {
 		HelmUpdate: true, // Flag default when run on CLI
 	}
 	o.Args = []string{name}
+	envDir, err := o.CommonOptions.EnvironmentsDir()
+	assert.NoError(t, err)
+	devEnvDir := testOptions.GetFullDevEnvDir(envDir)
+	o.CloneDir = devEnvDir
 	helm_test.StubFetchChart(name, "", kube.DefaultChartMuseumURL, &chart.Chart{
 		Metadata: &chart.Metadata{
 			Name:        name,
@@ -1025,9 +1046,6 @@ func TestAddAppWithReadmeForGitOps(t *testing.T) {
 	err = o.Run()
 	assert.NoError(t, err)
 	// Validate that the README.md file is in the right place
-	envDir, err := o.CommonOptions.EnvironmentsDir()
-	assert.NoError(t, err)
-	devEnvDir := testOptions.GetFullDevEnvDir(envDir)
 	readmeFromPrPath := filepath.Join(devEnvDir, name, "README.MD")
 	_, err = os.Stat(readmeFromPrPath)
 	assert.NoError(t, err)
@@ -1082,6 +1100,10 @@ func TestAddAppWithCustomReadmeForGitOps(t *testing.T) {
 	}
 	o.Verbose = true
 	o.Args = []string{name}
+	envDir, err := o.CommonOptions.EnvironmentsDir()
+	assert.NoError(t, err)
+	devEnvDir := testOptions.GetFullDevEnvDir(envDir)
+	o.CloneDir = devEnvDir
 	readmeFileName := "README.MD"
 	readme := "Tasty Cheese!\n"
 	helm_test.StubFetchChart(name, "", kube.DefaultChartMuseumURL, &chart.Chart{
@@ -1099,9 +1121,6 @@ func TestAddAppWithCustomReadmeForGitOps(t *testing.T) {
 	err = o.Run()
 	assert.NoError(t, err)
 	// Validate that the README.md file is in the right place
-	envDir, err := o.CommonOptions.EnvironmentsDir()
-	assert.NoError(t, err)
-	devEnvDir := testOptions.GetFullDevEnvDir(envDir)
 	readmeFromPrPath := filepath.Join(devEnvDir, name, readmeFileName)
 	_, err = os.Stat(readmeFromPrPath)
 	assert.NoError(t, err)
@@ -1146,6 +1165,10 @@ func TestAddLatestAppForGitOps(t *testing.T) {
 	}
 	o.Args = []string{name}
 	o.Verbose = true
+	envDir, err := o.CommonOptions.EnvironmentsDir()
+	assert.NoError(t, err)
+	devEnvDir := testOptions.GetFullDevEnvDir(envDir)
+	o.CloneDir = devEnvDir
 
 	helm_test.StubFetchChart(name, "", kube.DefaultChartMuseumURL, &chart.Chart{
 		Metadata: &chart.Metadata{
@@ -1162,9 +1185,6 @@ func TestAddLatestAppForGitOps(t *testing.T) {
 	assert.Equal(t, fmt.Sprintf("Add %s %s", name, version), pr.Title)
 	assert.Equal(t, fmt.Sprintf("Add app %s %s", name, version), pr.Body)
 	// Validate the branch name
-	envDir, err := o.CommonOptions.EnvironmentsDir()
-	assert.NoError(t, err)
-	devEnvDir := testOptions.GetFullDevEnvDir(envDir)
 	branchName, err := o.Git().Branch(devEnvDir)
 	assert.NoError(t, err)
 	assert.Equal(t, fmt.Sprintf("add-app-%s-%s", name, version), branchName)
@@ -1216,6 +1236,10 @@ func TestAddAppIncludingConditionalQuestionsForGitOps(t *testing.T) {
 		}
 		o.Args = []string{name}
 		o.BatchMode = false
+		envDir, err := o.CommonOptions.EnvironmentsDir()
+		assert.NoError(t, err)
+		devEnvDir := testOptions.GetFullDevEnvDir(envDir)
+		o.CloneDir = devEnvDir
 
 		helm_test.StubFetchChart(name, "", kube.DefaultChartMuseumURL, &chart.Chart{
 			Metadata: &chart.Metadata{
@@ -1231,7 +1255,7 @@ func TestAddAppIncludingConditionalQuestionsForGitOps(t *testing.T) {
   "description": "test values.yaml",
   "type": "object",
   "properties": {
-    "enablePersistentStorage": { 
+    "enablePersistentStorage": {
       "type": "boolean"
     }
     },
@@ -1239,8 +1263,8 @@ func TestAddAppIncludingConditionalQuestionsForGitOps(t *testing.T) {
       "properties": { "enablePersistentStorage": { "const": "true", "type": "boolean" } }
     },
     "then": {
-      "properties": { "databaseConnectionUrl": { "type": "string" }, 
-                      "databaseUsername": { "type": "string"}, 
+      "properties": { "databaseConnectionUrl": { "type": "string" },
+                      "databaseUsername": { "type": "string"},
                       "databasePassword": { "type": "string", "format" : "password"} }
     }}`),
 				},
@@ -1267,9 +1291,7 @@ func TestAddAppIncludingConditionalQuestionsForGitOps(t *testing.T) {
 		<-donec
 		r.Logf(expect.StripTrailingEmptyLines(console.CurrentState()))
 
-		envDir, err := o.CommonOptions.EnvironmentsDir()
-		assert.NoError(r, err)
-		valuesFromPrPath := filepath.Join(testOptions.GetFullDevEnvDir(envDir), name, helm.ValuesFileName)
+		valuesFromPrPath := filepath.Join(devEnvDir, name, helm.ValuesFileName)
 		_, err = os.Stat(valuesFromPrPath)
 		assert.NoError(r, err)
 		data, err := ioutil.ReadFile(valuesFromPrPath)
@@ -1325,6 +1347,10 @@ func TestAddAppExcludingConditionalQuestionsForGitOps(t *testing.T) {
 		}
 		o.Args = []string{name}
 		o.BatchMode = false
+		envDir, err := o.CommonOptions.EnvironmentsDir()
+		assert.NoError(t, err)
+		devEnvDir := testOptions.GetFullDevEnvDir(envDir)
+		o.CloneDir = devEnvDir
 
 		helm_test.StubFetchChart(name, "", kube.DefaultChartMuseumURL, &chart.Chart{
 			Metadata: &chart.Metadata{
@@ -1367,9 +1393,7 @@ func TestAddAppExcludingConditionalQuestionsForGitOps(t *testing.T) {
 		<-donec
 		r.Logf(expect.StripTrailingEmptyLines(console.CurrentState()))
 
-		envDir, err := o.CommonOptions.EnvironmentsDir()
-		assert.NoError(r, err)
-		valuesFromPrPath := filepath.Join(testOptions.GetFullDevEnvDir(envDir), name, helm.ValuesFileName)
+		valuesFromPrPath := filepath.Join(devEnvDir, name, helm.ValuesFileName)
 		_, err = os.Stat(valuesFromPrPath)
 		assert.NoError(r, err)
 		data, err := ioutil.ReadFile(valuesFromPrPath)
@@ -1407,6 +1431,10 @@ func TestAddAppForGitOpsWithSNAPSHOTVersion(t *testing.T) {
 			DevEnv:     testOptions.DevEnv,
 			HelmUpdate: true, // Flag default when run on CLI
 		}
+		envDir, err := o.CommonOptions.EnvironmentsDir()
+		assert.NoError(r, err)
+		devEnvDir := testOptions.GetFullDevEnvDir(envDir)
+		o.CloneDir = devEnvDir
 		pegomock.When(testOptions.MockHelmer.ListRepos()).ThenReturn(
 			map[string]string{
 				"repo1": kube.DefaultChartMuseumURL,
@@ -1435,9 +1463,6 @@ func TestAddAppForGitOpsWithSNAPSHOTVersion(t *testing.T) {
 		assert.Equal(r, fmt.Sprintf("Add %s %s", name, version), pr.Title)
 		assert.Equal(r, fmt.Sprintf("Add app %s %s", name, version), pr.Body)
 		// Validate the branch name
-		envDir, err := o.CommonOptions.EnvironmentsDir()
-		assert.NoError(r, err)
-		devEnvDir := testOptions.GetFullDevEnvDir(envDir)
 		branchName, err := o.Git().Branch(devEnvDir)
 		assert.NoError(r, err)
 		assert.Equal(r, fmt.Sprintf("add-app-%s-%s", name, version), branchName)

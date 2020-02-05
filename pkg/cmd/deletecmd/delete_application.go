@@ -44,7 +44,7 @@ var (
 	deleteApplicationLong = templates.LongDesc(`
 		Deletes one or more Applications
 
-		Note that this command does not remove the underlying Git Repositories. 
+		Note that this command does not remove the underlying Git Repositories.
 
 		For that see the [jx delete repo](https://jenkins-x.io/commands/jx_delete_repo/) command.
 
@@ -52,9 +52,9 @@ var (
 
 	deleteApplicationExample = templates.Examples(`
 		# prompt for the available applications to delete
-		jx delete application 
+		jx delete application
 
-		# delete a specific app 
+		# delete a specific app
 		jx delete application cheese
 	`)
 )
@@ -75,6 +75,9 @@ type DeleteApplicationOptions struct {
 	// calculated fields
 	TimeoutDuration         *time.Duration
 	PullRequestPollDuration *time.Duration
+
+	// Used for testing
+	CloneDir string
 }
 
 // NewCmdDeleteApplication creates a command object for this command
@@ -336,7 +339,7 @@ func (o *DeleteApplicationOptions) deleteJenkinsApplication() (deletedApplicatio
 	deleteMessage := strings.Join(args, ", ")
 
 	if !o.BatchMode {
-		if !util.Confirm("You are about to delete these Applications from Jenkins: "+deleteMessage, false, "The list of Applications names to be deleted from Jenkins", o.GetIOFileHandles()) {
+		if answer, err := util.Confirm("You are about to delete these Applications from Jenkins: "+deleteMessage, false, "The list of Applications names to be deleted from Jenkins", o.GetIOFileHandles()); !answer {
 			return deletedApplications, err
 		}
 	}
@@ -406,11 +409,11 @@ func (o *DeleteApplicationOptions) deleteApplicationFromEnvironment(env *v1.Envi
 	if err != nil {
 		return errors.Wrapf(err, "creating git provider for %s", env.Spec.Source.URL)
 	}
-	environmentsDir, err := o.EnvironmentsDir()
-	if err != nil {
-		return errors.Wrapf(err, "getting environments dir")
-	}
 
+	envDir := ""
+	if o.CloneDir != "" {
+		envDir = o.CloneDir
+	}
 	details := gits.PullRequestDetails{
 		BranchName: "delete-" + applicationName,
 		Title:      "Delete application " + applicationName + " from this environment",
@@ -421,7 +424,7 @@ func (o *DeleteApplicationOptions) deleteApplicationFromEnvironment(env *v1.Envi
 		ModifyChartFn: modifyChartFn,
 		GitProvider:   gitProvider,
 	}
-	info, err := options.Create(env, environmentsDir, &details, nil, "", o.AutoMerge)
+	info, err := options.Create(env, envDir, &details, nil, "", o.AutoMerge)
 	if err != nil {
 		return err
 	}
