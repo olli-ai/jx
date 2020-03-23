@@ -16,8 +16,8 @@ import (
 )
 
 // Labels required to be a lock. Anything else should be ignored
-var lockLabels map[string]string = map[string]string {
-	"jenkins-x.io/kind": "lock",
+var buildLockLabels map[string]string = map[string]string {
+	"jenkins-x.io/kind": "build-lock",
 }
 
 // Acquires a build lock, to avoid other builds to edit the same namespace
@@ -59,25 +59,29 @@ func AcquireBuildLock(kubeClient kubernetes.Interface, devNamespace, namespace s
 			len(podList.Items), owner, repository, branch, build)
 	}
 	pod := &podList.Items[0]
-	// The initial data for the lock
-	buildData := map[string]string {
-		"namespace":  namespace,
-		"owner":      owner,
-		"repository": repository,
-		"branch":     branch,
-		"build":      build,
-		"pod":        pod.Name,
-		"timestamp":  now,
+	// kubernetes library seems to forget APIVersoin and Kind
+	// fill those if they're missing
+	if pod.APIVersion == "" {
+		pod.APIVersion = "v1"
 	}
+	if pod.Kind == "" {
+		pod.Kind = "Pod"
+	}
+	podKind := pod.Kind
 	// Create the lock object
 	lock := &v1.ConfigMap {
 		ObjectMeta: metav1.ObjectMeta {
 			Name:            fmt.Sprintf("jx-lock-%s", namespace),
 			Namespace:       devNamespace,
 			Labels:          map[string]string {
-				"jenkins-x.io/created-by": "Jenkins X",
+				"namespace":  namespace,
+				"owner":      owner,
+				"repository": repository,
+				"branch":     branch,
+				"build":      build,
 			},
 			Annotations:     map[string]string {
+				"jenkins-x.io/created-by": "Jenkins X",
 				"warning": "DO NOT REMOVE",
 				"purpose": fmt.Sprintf("This is a deployment lock for the " +
 					"namespace \"%s\". It prevents several deployments to " +
@@ -93,13 +97,18 @@ func AcquireBuildLock(kubeClient kubernetes.Interface, devNamespace, namespace s
 				UID:        pod.UID,
 			}},
 		},
-		Data:       buildData,
+		Data:       map[string]string {
+			"namespace":  namespace,
+			"owner":      owner,
+			"repository": repository,
+			"branch":     branch,
+			"build":      build,
+			"pod":        pod.Name,
+			"timestamp":  now,
+		},
 	}
-	for k, v := range lockLabels {
-		lock.Annotations[k] = v
-	}
-	for k, v := range buildData {
-		lock.Annotations[k] = v
+	for k, v := range buildLockLabels {
+		lock.Labels[k] = v
 	}
 	// this loop continuously tries to create the lock
 	Create: for {
@@ -155,8 +164,8 @@ func AcquireBuildLock(kubeClient kubernetes.Interface, devNamespace, namespace s
 			// check if the lock should not simply be removed
 			remove := false
 			// check the lock
-			for k, v := range lockLabels {
-				if old.Annotations[k] != v {
+			for k, v := range buildLockLabels {
+				if old.Labels[k] != v {
 					log.Logger().Warnf("the lock %s should have annotation \"%s: %s\"", old.Name, k, v)
 					remove = true
 				}
@@ -165,9 +174,19 @@ func AcquireBuildLock(kubeClient kubernetes.Interface, devNamespace, namespace s
 				log.Logger().Warnf("the lock %s should have label \"namespace: %s\"", old.Name, namespace)
 				remove = true
 			}
+			var owner *metav1.OwnerReference
+			if !remove {
+				if len(old.OwnerReferences) != 1 {
+					log.Logger().Warnf("the lock %s has %d OwnerReferences", old.Name, len(old.OwnerReferences))
+					remove = true
+				} else if owner = &old.OwnerReferences[0]; owner.Kind != podKind || owner.Name == "" || owner.UID == "" {
+					log.Logger().Warnf("the lock %s has invalid OwnerReference %v", old.Name, owner)
+					remove = true
+				}
+			}
 			// get the current locking pod if not already provided
-			if !remove && (pod == nil || pod.Name != old.Data["pod"]) {
-				pod, err = kubeClient.CoreV1().Pods(devNamespace).Get(old.Data["pod"], metav1.GetOptions{})
+			if !remove && (pod == nil || pod.Name != owner.Name || pod.UID != owner.UID) {
+				pod, err = kubeClient.CoreV1().Pods(devNamespace).Get(owner.Name, metav1.GetOptions{})
 				if err != nil {
 					status, ok := err.(*errors.StatusError)
 					// the pod does not exist anymore, the lock should be removed
@@ -179,6 +198,9 @@ func AcquireBuildLock(kubeClient kubernetes.Interface, devNamespace, namespace s
 						log.Logger().Warnf("failed to get the locking pod %s: %s\n", old.Data["pod"], err.Error())
 						return nil, err
 					}
+				} else if pod.UID != owner.UID {
+					log.Logger().Infof("locking pod %s finished", pod.Name)
+					remove = true
 				}
 			}
 			// check the pod's phase
@@ -215,7 +237,7 @@ func AcquireBuildLock(kubeClient kubernetes.Interface, devNamespace, namespace s
 				}
 			}
 			// compare the builds
-			if data, err := compareBuilds(old.Data, buildData); err != nil {
+			if data, err := compareBuildLocks(old.Data, lock.Data); err != nil {
 				return nil, err
 			// should update the build to wait
 			} else if data != nil {
@@ -239,7 +261,7 @@ func AcquireBuildLock(kubeClient kubernetes.Interface, devNamespace, namespace s
 				}
 			}
 			// watch the lock for updates
-			if old, err = watchLock(kubeClient, old, pod, buildData); err != nil {
+			if old, err = watchBuildLock(kubeClient, old, pod, lock.Data); err != nil {
 				return nil, err
 			// lock configmap was updated, read it again
 			} else if old != nil {
@@ -252,7 +274,7 @@ func AcquireBuildLock(kubeClient kubernetes.Interface, devNamespace, namespace s
 	}
 }
 
-func watchLock(kubeClient kubernetes.Interface, lock *v1.ConfigMap, pod *v1.Pod, build map[string]string) (*v1.ConfigMap, error) {
+func watchBuildLock(kubeClient kubernetes.Interface, lock *v1.ConfigMap, pod *v1.Pod, build map[string]string) (*v1.ConfigMap, error) {
 	// watch both the pod and the lock for updates
 	log.Logger().Infof("waiting for updates on the lock configmap %s", lock.Name)
 	lockWatch, err := kubeClient.CoreV1().ConfigMaps(lock.Namespace).Watch(metav1.SingleObject(lock.ObjectMeta))
@@ -278,7 +300,7 @@ func watchLock(kubeClient kubernetes.Interface, lock *v1.ConfigMap, pod *v1.Pod,
 			case watch.Added, watch.Modified:
 				lock := event.Object.(*v1.ConfigMap)
 				// if the waiting build has changed, read again
-				if next, err := compareBuilds(lock.Data, build); err != nil {
+				if next, err := compareBuildLocks(lock.Data, build); err != nil {
 					return nil, err
 				} else if next != nil {
 					return lock, nil
@@ -317,7 +339,7 @@ func watchLock(kubeClient kubernetes.Interface, lock *v1.ConfigMap, pod *v1.Pod,
 // Campares two builds
 // If next is nil, the build is already waiting
 // if next is not nil, the build should wait, and save these data
-func compareBuilds(old, new map[string]string) (next map[string]string, err error) {
+func compareBuildLocks(old, new map[string]string) (next map[string]string, err error) {
 	sameRepo := true
 	for _, k := range [3]string{"owner", "repository", "branch"} {
 		if old[k] != new[k] {
@@ -327,7 +349,7 @@ func compareBuilds(old, new map[string]string) (next map[string]string, err erro
 	// both are deplying the same repo and branch, compare build number
 	if sameRepo {
 		// same build and pod, we're already waiting
-		if old["build"] == new["build"] && old["pod"] == new["pod"] {
+		if old["build"] == new["build"] {
 			return nil, nil
 		}
 		// parse the builds
