@@ -195,7 +195,7 @@ Create:
 					if ok && status.Status().Reason == metav1.StatusReasonNotFound {
 						log.Logger().Infof("locking pod %s finished", pod.Name)
 						remove = true
-					// an error while getting the pod
+						// an error while getting the pod
 					} else {
 						log.Logger().Warnf("failed to get the locking pod %s: %s\n", old.Data["pod"], err.Error())
 						return nil, err
@@ -227,12 +227,12 @@ Create:
 				// already deleted, try to create it
 				if ok && status.Status().Reason == metav1.StatusReasonNotFound {
 					continue Create
-				// the lock changed, read it again
+					// the lock changed, read it again
 				} else if ok && status.Status().Reason == metav1.StatusReasonConflict {
 					log.Logger().Infof("lock configmap %s changed", lock.Name)
 					old = nil
 					continue Read
-				// an error while removing the pod
+					// an error while removing the pod
 				} else {
 					log.Logger().Warnf("failed to cleanup the old lock configmap %s: %s\n", lock.Name, err.Error())
 					return nil, err
@@ -241,7 +241,7 @@ Create:
 			// compare the builds
 			if data, err := compareBuildLocks(old.Data, lock.Data); err != nil {
 				return nil, err
-			// should update the build to wait
+				// should update the build to wait
 			} else if data != nil {
 				old.Data = data
 				old, err = kubeClient.CoreV1().ConfigMaps(devNamespace).Update(old)
@@ -251,7 +251,7 @@ Create:
 					if ok && status.Status().Reason == metav1.StatusReasonNotFound {
 						log.Logger().Infof("lock configmap %s deleted", lock.Name)
 						continue Create
-					// the lock has changed, read it again
+						// the lock has changed, read it again
 					} else if ok && status.Status().Reason == metav1.StatusReasonConflict {
 						log.Logger().Infof("lock configmap %s changed", lock.Name)
 						old = nil
@@ -265,10 +265,10 @@ Create:
 			// watch the lock for updates
 			if old, err = watchBuildLock(kubeClient, old, pod, lock.Data); err != nil {
 				return nil, err
-			// lock configmap was updated, read it again
+				// lock configmap was updated, read it again
 			} else if old != nil {
 				continue Read
-			// lock configmap was (probably) deleted, try to create it again
+				// lock configmap was (probably) deleted, try to create it again
 			} else {
 				continue Create
 			}
@@ -361,7 +361,7 @@ func compareBuildLocks(old, new map[string]string) (next map[string]string, err 
 		} else if newBuild, err := strconv.Atoi(new["build"]); err != nil {
 			log.Logger().Warnf("cannot parse the lock's build number %s: %s\n", new["build"], err.Error())
 			return nil, err
-		// older build, give up
+			// older build, give up
 		} else if oldBuild >= newBuild {
 			log.Logger().Warnf("newer build %d is waiting already", oldBuild)
 			return nil, fmt.Errorf("newer build %d is waiting already", oldBuild)
@@ -373,7 +373,7 @@ func compareBuildLocks(old, new map[string]string) (next map[string]string, err 
 		} else if newTime, err := time.Parse(time.RFC3339Nano, new["timestamp"]); err != nil {
 			log.Logger().Warnf("cannot parse the lock's timestamp %s: %s\n", new["timestamp"], err.Error())
 			return nil, err
-		// keep increasing the timestamp, for consistency reasons
+			// keep increasing the timestamp, for consistency reasons
 		} else if oldTime.After(newTime) {
 			next := map[string]string{}
 			for k, v := range new {
@@ -381,13 +381,13 @@ func compareBuildLocks(old, new map[string]string) (next map[string]string, err 
 			}
 			next["timestamp"] = old["timestamp"]
 			return next, nil
-		// timestamp already right
+			// timestamp already right
 		} else {
 			return new, nil
 		}
-	// both are deploying different repos, keep the newest one
-	// it is a corner case for consistency
-	// but should not happen on a standard cluster
+		// both are deploying different repos, keep the newest one
+		// it is a corner case for consistency
+		// but should not happen on a standard cluster
 	} else {
 		// parse the timestamps
 		if oldTime, err := time.Parse(time.RFC3339Nano, old["timestamp"]); err != nil {
@@ -396,10 +396,10 @@ func compareBuildLocks(old, new map[string]string) (next map[string]string, err 
 		} else if newTime, err := time.Parse(time.RFC3339Nano, new["timestamp"]); err != nil {
 			log.Logger().Warnf("cannot parse the lock's timestamp %s: %s\n", new["timestamp"], err.Error())
 			return nil, err
-		// newer deployment, wait
+			// newer deployment, wait
 		} else if newTime.After(oldTime) {
 			return new, nil
-		// older deployment, give up
+			// older deployment, give up
 		} else {
 			return nil, fmt.Errorf("newer build %s is waiting already", oldTime)
 		}
