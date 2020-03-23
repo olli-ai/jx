@@ -16,7 +16,7 @@ import (
 )
 
 // Labels required to be a lock. Anything else should be ignored
-var buildLockLabels map[string]string = map[string]string {
+var buildLockLabels map[string]string = map[string]string{
 	"jenkins-x.io/kind": "build-lock",
 }
 
@@ -69,24 +69,24 @@ func AcquireBuildLock(kubeClient kubernetes.Interface, devNamespace, namespace s
 	}
 	podKind := pod.Kind
 	// Create the lock object
-	lock := &v1.ConfigMap {
-		ObjectMeta: metav1.ObjectMeta {
-			Name:            fmt.Sprintf("jx-lock-%s", namespace),
-			Namespace:       devNamespace,
-			Labels:          map[string]string {
+	lock := &v1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("jx-lock-%s", namespace),
+			Namespace: devNamespace,
+			Labels: map[string]string{
 				"namespace":  namespace,
 				"owner":      owner,
 				"repository": repository,
 				"branch":     branch,
 				"build":      build,
 			},
-			Annotations:     map[string]string {
+			Annotations: map[string]string{
 				"jenkins-x.io/created-by": "Jenkins X",
-				"warning": "DO NOT REMOVE",
-				"purpose": fmt.Sprintf("This is a deployment lock for the " +
-					"namespace \"%s\". It prevents several deployments to " +
-					"edit the same namespace at the same time. It will " +
-					"automatically be removed once the deployemnt is " +
+				"warning":                 "DO NOT REMOVE",
+				"purpose": fmt.Sprintf("This is a deployment lock for the "+
+					"namespace \"%s\". It prevents several deployments to "+
+					"edit the same namespace at the same time. It will "+
+					"automatically be removed once the deployemnt is "+
 					"finished, or replaced by the next deployemnt to run.",
 					namespace),
 			},
@@ -97,7 +97,7 @@ func AcquireBuildLock(kubeClient kubernetes.Interface, devNamespace, namespace s
 				UID:        pod.UID,
 			}},
 		},
-		Data:       map[string]string {
+		Data: map[string]string{
 			"namespace":  namespace,
 			"owner":      owner,
 			"repository": repository,
@@ -111,7 +111,8 @@ func AcquireBuildLock(kubeClient kubernetes.Interface, devNamespace, namespace s
 		lock.Labels[k] = v
 	}
 	// this loop continuously tries to create the lock
-	Create: for {
+Create:
+	for {
 		log.Logger().Infof("creating the lock configmap %s", lock.Name)
 		// create the lock
 		new, err := kubeClient.CoreV1().ConfigMaps(devNamespace).Create(lock)
@@ -131,8 +132,8 @@ func AcquireBuildLock(kubeClient kubernetes.Interface, devNamespace, namespace s
 			return func() error {
 				log.Logger().Infof("cleaning the lock configmap %s", lock.Name)
 				err := kubeClient.CoreV1().ConfigMaps(devNamespace).Delete(lock.Name,
-					&metav1.DeleteOptions {
-						Preconditions: &metav1.Preconditions {
+					&metav1.DeleteOptions{
+						Preconditions: &metav1.Preconditions{
 							UID: &new.UID,
 						},
 					})
@@ -145,7 +146,8 @@ func AcquireBuildLock(kubeClient kubernetes.Interface, devNamespace, namespace s
 		// create these variables outside, to be able to edit them before the next loop
 		var old *v1.ConfigMap
 		var pod *v1.Pod
-		Read: for {
+	Read:
+		for {
 			// get the current lock if not already provided
 			if old == nil {
 				old, err = kubeClient.CoreV1().ConfigMaps(devNamespace).Get(lock.Name, metav1.GetOptions{})
@@ -212,8 +214,8 @@ func AcquireBuildLock(kubeClient kubernetes.Interface, devNamespace, namespace s
 			if remove {
 				log.Logger().Infof("cleaning the old lock configmap %s", lock.Name)
 				err := kubeClient.CoreV1().ConfigMaps(devNamespace).Delete(lock.Name,
-					&metav1.DeleteOptions {
-						Preconditions: &metav1.Preconditions {
+					&metav1.DeleteOptions{
+						Preconditions: &metav1.Preconditions{
 							UID: &old.UID,
 						},
 					})
@@ -294,7 +296,7 @@ func watchBuildLock(kubeClient kubernetes.Interface, lock *v1.ConfigMap, pod *v1
 	for {
 		select {
 		// an event about the lock
-		case event := <- lockChan:
+		case event := <-lockChan:
 			switch event.Type {
 			// the lock has changed
 			case watch.Added, watch.Modified:
@@ -314,7 +316,7 @@ func watchBuildLock(kubeClient kubernetes.Interface, lock *v1.ConfigMap, pod *v1
 				log.Logger().Warnf("cannot watch the lock configmap %s: %s\n", lock.Name, err.Error())
 				return nil, err
 			}
-		case event := <- podChan:
+		case event := <-podChan:
 			switch event.Type {
 			// the pod has changed, if its phase has changed,
 			// let's assume that the configmap has been deleted
@@ -373,8 +375,8 @@ func compareBuildLocks(old, new map[string]string) (next map[string]string, err 
 			return nil, err
 		// keep increasing the timestamp, for consistency reasons
 		} else if oldTime.After(newTime) {
-			next := map[string]string {}
-			for k, v := range(new) {
+			next := map[string]string{}
+			for k, v := range new {
 				next[k] = v
 			}
 			next["timestamp"] = old["timestamp"]
