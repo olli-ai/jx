@@ -189,7 +189,7 @@ func (o *StepHelmApplyOptions) Run() error {
 		defer os.RemoveAll(rootTmpDir)
 	}
 
-	if release, err := kube.AcquireLock(kubeClient); err != nil {
+	if release, err := kube.AcquireBuildLock(kubeClient, devNs, ns); err != nil {
 		return errors.Wrapf(err, "fail to acquire the lock")
 	} else {
 		defer release()
