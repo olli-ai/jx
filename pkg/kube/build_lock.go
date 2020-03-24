@@ -8,7 +8,7 @@ import (
 
 	"github.com/jenkins-x/jx/pkg/log"
 
-	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
@@ -77,7 +77,7 @@ func AcquireBuildLock(kubeClient kubernetes.Interface, devNamespace, namespace s
 	}
 	podKind := pod.Kind
 	// Create the lock object
-	lock := &corev1.ConfigMap{
+	lock := &v1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("jx-lock-%s", namespace),
 			Namespace: devNamespace,
@@ -152,8 +152,8 @@ Create:
 			}, nil
 		}
 		// create these variables outside, to be able to edit them before the next loop
-		var old *corev1.ConfigMap
-		var pod *corev1.Pod
+		var old *v1.ConfigMap
+		var pod *v1.Pod
 	Read:
 		for {
 			// get the current lock if not already provided
@@ -189,34 +189,31 @@ Create:
 				if len(old.OwnerReferences) != 1 {
 					log.Logger().Warnf("the lock %s has %d OwnerReferences", old.Name, len(old.OwnerReferences))
 					remove = true
-				} else if owner = &old.OwnerReferences[0]; owner.Kind != podKind || owner.Name == "" || owner.UID == "" {
+				} else if owner = &old.OwnerReferences[0]; owner.Kind != podKind || owner.Name == "" {
 					log.Logger().Warnf("the lock %s has invalid OwnerReference %v", old.Name, owner)
 					remove = true
 				}
 			}
 			// get the current locking pod if not already provided
-			if !remove && (pod == nil || pod.Name != owner.Name || pod.UID != owner.UID) {
+			if !remove && (pod == nil || pod.Name != owner.Name) {
 				pod, err = kubeClient.CoreV1().Pods(devNamespace).Get(owner.Name, metav1.GetOptions{})
 				if err != nil {
 					status, ok := err.(*errors.StatusError)
 					// the pod does not exist anymore, the lock should be removed
 					if ok && status.Status().Reason == metav1.StatusReasonNotFound {
-						log.Logger().Infof("locking pod %s finished", pod.Name)
+						log.Logger().Infof("locking pod %s finished", owner.Name)
 						remove = true
 						// an error while getting the pod
 					} else {
 						log.Logger().Warnf("failed to get the locking pod %s: %s\n", old.Data["pod"], err.Error())
 						return nil, err
 					}
-				} else if pod.UID != owner.UID {
-					log.Logger().Infof("locking pod %s finished", pod.Name)
-					remove = true
 				}
 			}
 			// check the pod's phase
 			if !remove && pod != nil {
 				log.Logger().Infof("locking pod %s is in phase %s", pod.Name, pod.Status.Phase)
-				remove = pod.Status.Phase != "Pending" && pod.Status.Phase != "Running"
+				remove = pod.Status.Phase != v1.PodPending && pod.Status.Phase != v1.PodRunning
 			}
 			// remove the lock
 			if remove {
@@ -287,7 +284,7 @@ Create:
 // watchBuildLock watches a lock configmap and its locking pod to detect any change
 // Returns nil if the lock was deleted, or is expected to be deleted
 // Returns the new lock configmap if another build is waiting
-func watchBuildLock(kubeClient kubernetes.Interface, lock *corev1.ConfigMap, pod *corev1.Pod, build map[string]string) (*corev1.ConfigMap, error) {
+func watchBuildLock(kubeClient kubernetes.Interface, lock *v1.ConfigMap, pod *v1.Pod, build map[string]string) (*v1.ConfigMap, error) {
 	// watch both the pod and the lock for updates
 	log.Logger().Infof("waiting for updates on the lock configmap %s", lock.Name)
 	lockWatch, err := kubeClient.CoreV1().ConfigMaps(lock.Namespace).Watch(metav1.SingleObject(lock.ObjectMeta))
@@ -311,7 +308,7 @@ func watchBuildLock(kubeClient kubernetes.Interface, lock *corev1.ConfigMap, pod
 			switch event.Type {
 			// the lock has changed
 			case watch.Added, watch.Modified:
-				lock := event.Object.(*corev1.ConfigMap)
+				lock := event.Object.(*v1.ConfigMap)
 				// if the waiting build has changed, read again
 				if next, err := compareBuildLocks(lock.Data, build); err != nil {
 					return nil, err
@@ -332,8 +329,8 @@ func watchBuildLock(kubeClient kubernetes.Interface, lock *corev1.ConfigMap, pod
 			// the pod has changed, if its phase has changed,
 			// let's assume that the configmap has been deleted
 			case watch.Added, watch.Modified:
-				pod := event.Object.(*corev1.Pod)
-				if pod.Status.Phase != "Pending" && pod.Status.Phase != "Running" {
+				pod := event.Object.(*v1.Pod)
+				if pod.Status.Phase != v1.PodPending && pod.Status.Phase != v1.PodRunning {
 					return nil, nil
 				}
 			// the pod was deleted, let's assume the configmap too
