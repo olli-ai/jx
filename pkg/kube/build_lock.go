@@ -15,17 +15,25 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-// Labels required to be a lock. Anything else should be ignored
+// Labels required to be a lock. Anything else should be ignored.
 var buildLockLabels map[string]string = map[string]string{
 	"jenkins-x.io/kind": "build-lock",
 }
 
-// Acquires a build lock, to avoid other builds to edit the same namespace
-// while a deployment is already running, other deployment can negotiate which one
-// should run after, by editing its data.
+// AcquireBuildLock acquires a build lock, to avoid other builds to edit the
+// same namespace while a deployment is already running, other deployments
+// can negotiate which one should run after, by editing its data.
 // Returns a function to release the lock (to be called in a defer)
 // Returns an error if a newer build is already running, or if an error happened
 func AcquireBuildLock(kubeClient kubernetes.Interface, devNamespace, namespace string) (func() error, error) {
+	// Only lock if running in Tekton
+	if ok, err := IsTektonEnabled(kubeClient, devNamespace); err != nil {
+		log.Logger().Warnf("error while looking for Tekton: %s\n", err.Error())
+		return nil, err
+	} else if !ok {
+		log.Logger().Infof("lock cancelled because not running in tekton")
+		return func() error { return nil }, nil
+	}
 	// Get infos from the headers
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	owner := os.Getenv("REPO_OWNER")
@@ -45,7 +53,7 @@ func AcquireBuildLock(kubeClient kubernetes.Interface, devNamespace, namespace s
 	}
 	build := os.Getenv("BUILD_NUMBER")
 	if _, err := strconv.Atoi(build); err != nil {
-		log.Logger().Warnf("no BUILD_NUMBER provided: %s\n", build, err.Error())
+		log.Logger().Warnf("no BUILD_NUMBER provided: %s\n", err.Error())
 		return nil, err
 	}
 	// Find our pod
@@ -276,7 +284,7 @@ Create:
 	}
 }
 
-// Watches a lock configmap and its locking pod to detect any change
+// watchBuildLock watches a lock configmap and its locking pod to detect any change
 // Returns nil if the lock was deleted, or is expected to be deleted
 // Returns the new lock configmap if another build is waiting
 func watchBuildLock(kubeClient kubernetes.Interface, lock *corev1.ConfigMap, pod *corev1.Pod, build map[string]string) (*corev1.ConfigMap, error) {
@@ -341,10 +349,10 @@ func watchBuildLock(kubeClient kubernetes.Interface, lock *corev1.ConfigMap, pod
 	}
 }
 
-// Campares two builds
+// compareBuildLocks compares two builds
 // If next is nil, the build is already waiting
-// if next is not nil, the build should wait, and save these data
-func compareBuildLocks(old, new map[string]string) (next map[string]string, err error) {
+// if next is not nil, the build should wait by updating the lock with these data
+func compareBuildLocks(old, new map[string]string) (map[string]string, error) {
 	sameRepo := true
 	for _, k := range [3]string{"owner", "repository", "branch"} {
 		if old[k] != new[k] {
@@ -354,7 +362,7 @@ func compareBuildLocks(old, new map[string]string) (next map[string]string, err 
 	// both are deplying the same repo and branch, compare build number
 	if sameRepo {
 		// same build and pod, we're already waiting
-		if old["build"] == new["build"] {
+		if old["build"] == new["build"] && old["pod"] == new["pod"] {
 			return nil, nil
 		}
 		// parse the builds
