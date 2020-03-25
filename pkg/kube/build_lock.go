@@ -293,14 +293,14 @@ func watchBuildLock(kubeClient kubernetes.Interface, lock *v1.ConfigMap, pod *v1
 		return nil, err
 	}
 	defer lockWatch.Stop()
-	podWatch, err := kubeClient.CoreV1().ConfigMaps(pod.Namespace).Watch(metav1.SingleObject(pod.ObjectMeta))
+	podWatch, err := kubeClient.CoreV1().Pods(pod.Namespace).Watch(metav1.SingleObject(pod.ObjectMeta))
 	if err != nil {
 		log.Logger().Warnf("cannot watch the locking pod %s: %s\n", pod.Name, err.Error())
 		return nil, err
 	}
 	defer podWatch.Stop()
 	lockChan := lockWatch.ResultChan()
-	podChan := lockWatch.ResultChan()
+	podChan := podWatch.ResultChan()
 	for {
 		select {
 		// an event about the lock
