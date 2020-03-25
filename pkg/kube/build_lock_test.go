@@ -223,8 +223,8 @@ func Test_compareBuildLocks(t *testing.T) {
 	}
 }
 
-// build_lock_client creates a fake client with a fake tekton deployment
-func build_lock_client(t *testing.T) *fake.Clientset {
+// buildLockClient creates a fake client with a fake tekton deployment
+func buildLockClient(t *testing.T) *fake.Clientset {
 	client := fake.NewSimpleClientset()
 	_, err := client.AppsV1().Deployments("jx").Create(&appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -236,8 +236,8 @@ func build_lock_client(t *testing.T) *fake.Clientset {
 	return client
 }
 
-// build_lock_count_watch count watchers for synchronization reasons
-func build_lock_count_watch(client *fake.Clientset) chan int {
+// buildLockCountWatch count watchers for synchronization reasons
+func buildLockCountWatch(client *fake.Clientset) chan int {
 	c := make(chan int, 100)
 	count := 0
 	client.PrependWatchReactor("*", func(action ktesting.Action) (handled bool, ret watch.Interface, err error) {
@@ -248,10 +248,10 @@ func build_lock_count_watch(client *fake.Clientset) chan int {
 	return c
 }
 
-var build_lock_uid int = 1 << 20 // the pid of out fake pods
-// build_lock_pod creates a running pod, looking close enough to a pipeline pod
-func build_lock_pod(t *testing.T, client kubernetes.Interface, owner, repository, branch, build string) *v1.Pod {
-	build_lock_uid ++
+var buildLockUID int = 1 << 20 // the pid of out fake pods
+// buildLockPod creates a running pod, looking close enough to a pipeline pod
+func buildLockPod(t *testing.T, client kubernetes.Interface, owner, repository, branch, build string) *v1.Pod {
+	buildLockUID ++
 	pod, err := client.CoreV1().Pods("jx").Create(&v1.Pod{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Pod",
@@ -267,7 +267,7 @@ func build_lock_pod(t *testing.T, client kubernetes.Interface, owner, repository
 				"build":                   build,
 				"jenkins.io/pipelineType": "build",
 			},
-			UID:        types.UID(fmt.Sprintf("%d", build_lock_uid)),
+			UID:        types.UID(fmt.Sprintf("%d", buildLockUID)),
 		},
 		Status: v1.PodStatus{
 			Phase: v1.PodRunning,
@@ -277,8 +277,8 @@ func build_lock_pod(t *testing.T, client kubernetes.Interface, owner, repository
 	return pod
 }
 
-// build_lock_lock creates a lock that matches a pod
-func build_lock_lock(t *testing.T, client kubernetes.Interface, namespace string, pod *v1.Pod, minutes int) *v1.ConfigMap {
+// buildLockLock creates a lock that matches a pod
+func buildLockLock(t *testing.T, client kubernetes.Interface, namespace string, pod *v1.Pod, minutes int) *v1.ConfigMap {
 	lock, err := client.CoreV1().ConfigMaps("jx").Create(&v1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "jx-lock-my-namespace",
@@ -305,23 +305,23 @@ func build_lock_lock(t *testing.T, client kubernetes.Interface, namespace string
 			"branch":     pod.Labels["branch"],
 			"build":      pod.Labels["build"],
 			"pod":        pod.Name,
-			"timestamp":  build_lock_timestamp(minutes),
+			"timestamp":  buildLockTimestamp(minutes),
 		},
 	})
 	require.NoError(t, err)
 	return lock
 }
 
-// build_lock_timestamp create the timestamp for a lock, now plus or minus some minutes
-func build_lock_timestamp(minutes int) string {
+// buildLockTimestamp create the timestamp for a lock, now plus or minus some minutes
+func buildLockTimestamp(minutes int) string {
 	now := time.Now().UTC()
 	now = now.Add(time.Duration(minutes) * time.Minute)
 	return now.Format(time.RFC3339Nano)
 }
 
-// build_lock_env prepares the environment for calling AcquireBuildLock
+// buildLockEnv prepares the environment for calling AcquireBuildLock
 // returns a defer function to restore the environment
-func build_lock_env(t *testing.T, owner, repository, branch, build string) func() {
+func buildLockEnv(t *testing.T, owner, repository, branch, build string) func() {
 	env := map[string]string {
 		"REPO_OWNER":   owner,
 		"REPO_NAME":    repository,
@@ -342,14 +342,14 @@ func build_lock_env(t *testing.T, owner, repository, branch, build string) func(
 	}
 }
 
-// build_lock_acquire calls AcquireBuildLock with arguments matching a pod
+// buildLockAcquire calls AcquireBuildLock with arguments matching a pod
 // returns a defer function to restore the environment
 // returns a chan that is filled once AcquireBuildLock returns
 // its item will perform some check and call the callback
 // its item is nil on timeout
-func build_lock_acquire(t *testing.T, client kubernetes.Interface, namespace string, pod *v1.Pod, fails bool) (func(), chan func()) {
+func buildLockAcquire(t *testing.T, client kubernetes.Interface, namespace string, pod *v1.Pod, fails bool) (func(), chan func()) {
 	c := make(chan func(), 2)
-	clean := build_lock_env(t, pod.Labels["owner"], pod.Labels["repository"], pod.Labels["branch"], pod.Labels["build"])
+	clean := buildLockEnv(t, pod.Labels["owner"], pod.Labels["repository"], pod.Labels["branch"], pod.Labels["build"])
 	go func() {
 		callback, err := AcquireBuildLock(client, "jx", namespace)
 		c <- func () {
@@ -368,8 +368,8 @@ func build_lock_acquire(t *testing.T, client kubernetes.Interface, namespace str
 	return clean, c
 }
 
-// build_lock_check checks if the lock configmap is matching the given pod
-func build_lock_check(t *testing.T, client kubernetes.Interface, namespace string, pod *v1.Pod) {
+// builLockCheck checks if the lock configmap is matching the given pod
+func builLockCheck(t *testing.T, client kubernetes.Interface, namespace string, pod *v1.Pod) {
 	lock, err := client.CoreV1().ConfigMaps("jx").Get("jx-lock-" + namespace, metav1.GetOptions{})
 	if pod == nil {
 		assert.Nil(t, lock)
@@ -410,81 +410,81 @@ func build_lock_check(t *testing.T, client kubernetes.Interface, namespace strin
 
 func TestAcquireBuildLock(t *testing.T) {
 	// just acquire a lock when no lock exists
-	client := build_lock_client(t)
-	pod := build_lock_pod(t, client, "my-owner", "my-repository", "my-branch", "13")
-	clean, channel := build_lock_acquire(t, client, "my-namespace", pod, false)
+	client := buildLockClient(t)
+	pod := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "13")
+	clean, channel := buildLockAcquire(t, client, "my-namespace", pod, false)
 	defer clean()
 	callback := <- channel
 	require.NotNil(t, callback, "timeout")
-	build_lock_check(t, client, "my-namespace", pod)
+	builLockCheck(t, client, "my-namespace", pod)
 	callback()
-	build_lock_check(t, client, "my-namespace", nil)
+	builLockCheck(t, client, "my-namespace", nil)
 }
 
 func TestAcquireBuildLock_invalidLock(t *testing.T) {
 	// fails at acquiring the lock because an higher build is running
-	client := build_lock_client(t)
-	previous := build_lock_pod(t, client, "my-owner", "my-repository", "my-branch", "42")
-	lock := build_lock_lock(t, client, "my-namespace", previous, -42)
+	client := buildLockClient(t)
+	previous := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "42")
+	lock := buildLockLock(t, client, "my-namespace", previous, -42)
 	lock.Labels["jenkins-x.io/kind"] = "other-lock"
 	_, err := client.CoreV1().ConfigMaps("jx").Update(lock)
 	require.NoError(t, err)
 
-	pod := build_lock_pod(t, client, "my-owner", "my-repository", "my-branch", "13")
-	clean, channel := build_lock_acquire(t, client, "my-namespace", pod, false)
+	pod := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "13")
+	clean, channel := buildLockAcquire(t, client, "my-namespace", pod, false)
 	defer clean()
 	callback := <- channel
 	require.NotNil(t, callback, "timeout")
-	build_lock_check(t, client, "my-namespace", pod)
+	builLockCheck(t, client, "my-namespace", pod)
 	callback()
-	build_lock_check(t, client, "my-namespace", nil)
+	builLockCheck(t, client, "my-namespace", nil)
 }
 
 func TestAcquireBuildLock_previousNotFound(t *testing.T) {
 	// acquire a lock when the locking pod does not exist
-	client := build_lock_client(t)
-	previous := build_lock_pod(t, client, "my-owner", "my-repository", "my-branch", "42")
-	build_lock_lock(t, client, "my-namespace", previous, 42)
+	client := buildLockClient(t)
+	previous := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "42")
+	buildLockLock(t, client, "my-namespace", previous, 42)
 	err := client.CoreV1().Pods("jx").Delete(previous.Name, &metav1.DeleteOptions{})
 	require.NoError(t, err)
 
-	pod := build_lock_pod(t, client, "my-owner", "my-repository", "my-branch", "13")
-	clean, channel := build_lock_acquire(t, client, "my-namespace", pod, false)
+	pod := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "13")
+	clean, channel := buildLockAcquire(t, client, "my-namespace", pod, false)
 	defer clean()
 	callback := <- channel
 	require.NotNil(t, callback, "timeout")
-	build_lock_check(t, client, "my-namespace", pod)
+	builLockCheck(t, client, "my-namespace", pod)
 	callback()
-	build_lock_check(t, client, "my-namespace", nil)
+	builLockCheck(t, client, "my-namespace", nil)
 }
 
 func TestAcquireBuildLock_previousFinished(t *testing.T) {
 	// acquire a lock when the locking pod has finished
-	client := build_lock_client(t)
-	previous := build_lock_pod(t, client, "my-owner", "my-repository", "my-branch", "42")
-	build_lock_lock(t, client, "my-namespace", previous, 42)
+	client := buildLockClient(t)
+	previous := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "42")
+	buildLockLock(t, client, "my-namespace", previous, 42)
 	previous.Status.Phase = v1.PodFailed
 	_, err := client.CoreV1().Pods("jx").Update(previous)
 	require.NoError(t, err)
 
-	pod := build_lock_pod(t, client, "my-owner", "my-repository", "my-branch", "13")
-	clean, channel := build_lock_acquire(t, client, "my-namespace", pod, false)
+	pod := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "13")
+	clean, channel := buildLockAcquire(t, client, "my-namespace", pod, false)
 	defer clean()
 	callback := <- channel
 	require.NotNil(t, callback, "timeout")
-	build_lock_check(t, client, "my-namespace", pod)
+	builLockCheck(t, client, "my-namespace", pod)
 	callback()
-	build_lock_check(t, client, "my-namespace", nil)
+	builLockCheck(t, client, "my-namespace", nil)
 }
 
 func TestAcquireBuildLock_higherRuns(t *testing.T) {
 	// fails at acquiring the lock because an higher build is running
-	client := build_lock_client(t)
-	previous := build_lock_pod(t, client, "my-owner", "my-repository", "my-branch", "42")
-	build_lock_lock(t, client, "my-namespace", previous, -42)
+	client := buildLockClient(t)
+	previous := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "42")
+	buildLockLock(t, client, "my-namespace", previous, -42)
 
-	pod := build_lock_pod(t, client, "my-owner", "my-repository", "my-branch", "13")
-	clean, channel := build_lock_acquire(t, client, "my-namespace", pod, true)
+	pod := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "13")
+	clean, channel := buildLockAcquire(t, client, "my-namespace", pod, true)
 	defer clean()
 	callback := <- channel
 	callback()
@@ -492,12 +492,12 @@ func TestAcquireBuildLock_higherRuns(t *testing.T) {
 
 func TestAcquireBuildLock_laterRuns(t *testing.T) {
 	// fails at acquiring the lock because a later build is running
-	client := build_lock_client(t)
-	previous := build_lock_pod(t, client, "other-owner", "other-repository", "other-branch", "42")
-	build_lock_lock(t, client, "my-namespace", previous, 42)
+	client := buildLockClient(t)
+	previous := buildLockPod(t, client, "other-owner", "other-repository", "other-branch", "42")
+	buildLockLock(t, client, "my-namespace", previous, 42)
 
-	pod := build_lock_pod(t, client, "my-owner", "my-repository", "my-branch", "13")
-	clean, channel := build_lock_acquire(t, client, "my-namespace", pod, true)
+	pod := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "13")
+	clean, channel := buildLockAcquire(t, client, "my-namespace", pod, true)
 	defer clean()
 	callback := <- channel
 	callback()
@@ -505,13 +505,13 @@ func TestAcquireBuildLock_laterRuns(t *testing.T) {
 
 func TestAcquireBuildLock_waitLowerPodDeleted(t *testing.T) {
 	// wait for a lower build to be deleted
-	client := build_lock_client(t)
-	counter := build_lock_count_watch(client)
-	previous := build_lock_pod(t, client, "my-owner", "my-repository", "my-branch", "11")
-	old := build_lock_lock(t, client, "my-namespace", previous, 11)
+	client := buildLockClient(t)
+	counter := buildLockCountWatch(client)
+	previous := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "11")
+	old := buildLockLock(t, client, "my-namespace", previous, 11)
 	// should update the lock
-	pod := build_lock_pod(t, client, "my-owner", "my-repository", "my-branch", "13")
-	clean, channel := build_lock_acquire(t, client, "my-namespace", pod, false)
+	pod := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "13")
+	clean, channel := buildLockAcquire(t, client, "my-namespace", pod, false)
 	defer clean()
 	// wait for AcquireBuildLock to be waiting
 	for {
@@ -544,20 +544,20 @@ func TestAcquireBuildLock_waitLowerPodDeleted(t *testing.T) {
 	require.NoError(t, err)
 	callback := <- channel
 	require.NotNil(t, callback, "timeout")
-	build_lock_check(t, client, "my-namespace", pod)
+	builLockCheck(t, client, "my-namespace", pod)
 	callback()
-	build_lock_check(t, client, "my-namespace", nil)
+	builLockCheck(t, client, "my-namespace", nil)
 }
 
 func TestAcquireBuildLock_waitLowerLockDeleted(t *testing.T) {
 	// wait for a lower nuild lock to be deleted
-	client := build_lock_client(t)
-	counter := build_lock_count_watch(client)
-	previous := build_lock_pod(t, client, "my-owner", "my-repository", "my-branch", "11")
-	old := build_lock_lock(t, client, "my-namespace", previous, 11)
+	client := buildLockClient(t)
+	counter := buildLockCountWatch(client)
+	previous := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "11")
+	old := buildLockLock(t, client, "my-namespace", previous, 11)
 	// should update the lock
-	pod := build_lock_pod(t, client, "my-owner", "my-repository", "my-branch", "13")
-	clean, channel := build_lock_acquire(t, client, "my-namespace", pod, false)
+	pod := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "13")
+	clean, channel := buildLockAcquire(t, client, "my-namespace", pod, false)
 	defer clean()
 	// wait for AcquireBuildLock to be waiting
 	for {
@@ -590,20 +590,20 @@ func TestAcquireBuildLock_waitLowerLockDeleted(t *testing.T) {
 	require.NoError(t, err)
 	callback := <- channel
 	require.NotNil(t, callback, "timeout")
-	build_lock_check(t, client, "my-namespace", pod)
+	builLockCheck(t, client, "my-namespace", pod)
 	callback()
-	build_lock_check(t, client, "my-namespace", nil)
+	builLockCheck(t, client, "my-namespace", nil)
 }
 
 func TestAcquireBuildLock_waitEarlierFinished(t *testing.T) {
 	// wait for an earlier run to finish
-	client := build_lock_client(t)
-	counter := build_lock_count_watch(client)
-	previous := build_lock_pod(t, client, "other-owner", "other-repository", "other-branch", "42")
-	old := build_lock_lock(t, client, "my-namespace", previous, -42)
+	client := buildLockClient(t)
+	counter := buildLockCountWatch(client)
+	previous := buildLockPod(t, client, "other-owner", "other-repository", "other-branch", "42")
+	old := buildLockLock(t, client, "my-namespace", previous, -42)
 	// should update the lock
-	pod := build_lock_pod(t, client, "my-owner", "my-repository", "my-branch", "13")
-	clean, channel := build_lock_acquire(t, client, "my-namespace", pod, false)
+	pod := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "13")
+	clean, channel := buildLockAcquire(t, client, "my-namespace", pod, false)
 	defer clean()
 	// wait for AcquireBuildLock to be waiting
 	for {
@@ -640,20 +640,20 @@ func TestAcquireBuildLock_waitEarlierFinished(t *testing.T) {
 	require.NoError(t, err)
 	callback := <- channel
 	require.NotNil(t, callback, "timeout")
-	build_lock_check(t, client, "my-namespace", pod)
+	builLockCheck(t, client, "my-namespace", pod)
 	callback()
-	build_lock_check(t, client, "my-namespace", nil)
+	builLockCheck(t, client, "my-namespace", nil)
 }
 
 func TestAcquireBuildLock_waitButHigher(t *testing.T) {
 	// wait for a lower run to finish, but an higher run appears
-	client := build_lock_client(t)
-	counter := build_lock_count_watch(client)
-	previous := build_lock_pod(t, client, "my-owner", "my-repository", "my-branch", "11")
-	old := build_lock_lock(t, client, "my-namespace", previous, -11)
+	client := buildLockClient(t)
+	counter := buildLockCountWatch(client)
+	previous := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "11")
+	old := buildLockLock(t, client, "my-namespace", previous, -11)
 	// should update the lock
-	pod := build_lock_pod(t, client, "my-owner", "my-repository", "my-branch", "13")
-	clean, channel := build_lock_acquire(t, client, "my-namespace", pod, true)
+	pod := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "13")
+	clean, channel := buildLockAcquire(t, client, "my-namespace", pod, true)
 	defer clean()
 	// wait for AcquireBuildLock to be waiting
 	for {
