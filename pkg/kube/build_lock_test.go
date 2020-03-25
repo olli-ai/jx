@@ -8,12 +8,12 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/kubernetes/fake"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,7 +24,7 @@ func Test_compareBuildLocks(t *testing.T) {
 	time1 := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
 	time2 := time.Date(2000, 1, 1, 0, 0, 0, 200000000, time.UTC).Format(time.RFC3339Nano)
 	time3 := time.Date(2000, 1, 1, 0, 0, 0, 210000000, time.UTC).Format(time.RFC3339Nano)
-	examples := []struct{
+	examples := []struct {
 		name string
 		old  map[string]string
 		new  map[string]string
@@ -50,7 +50,7 @@ func Test_compareBuildLocks(t *testing.T) {
 		},
 		nil,
 		false,
-	},{
+	}, {
 		"same build but different pod (for some reason)",
 		map[string]string{
 			"owner":      "my-owner",
@@ -70,7 +70,7 @@ func Test_compareBuildLocks(t *testing.T) {
 		},
 		nil,
 		true,
-	},{
+	}, {
 		"lower build",
 		map[string]string{
 			"owner":      "my-owner",
@@ -90,7 +90,7 @@ func Test_compareBuildLocks(t *testing.T) {
 		},
 		nil,
 		true,
-	},{
+	}, {
 		"higher build",
 		map[string]string{
 			"owner":      "my-owner",
@@ -117,7 +117,7 @@ func Test_compareBuildLocks(t *testing.T) {
 			"timestamp":  time2,
 		},
 		false,
-	},{
+	}, {
 		"higher build but lower timestamp",
 		map[string]string{
 			"owner":      "my-owner",
@@ -144,7 +144,7 @@ func Test_compareBuildLocks(t *testing.T) {
 			"timestamp":  time3,
 		},
 		false,
-	},{
+	}, {
 		"other build, same timestamp",
 		map[string]string{
 			"owner":      "other-owner",
@@ -164,7 +164,7 @@ func Test_compareBuildLocks(t *testing.T) {
 		},
 		nil,
 		true,
-	},{
+	}, {
 		"other build, lower timestamp",
 		map[string]string{
 			"owner":      "my-owner",
@@ -184,7 +184,7 @@ func Test_compareBuildLocks(t *testing.T) {
 		},
 		nil,
 		true,
-	},{
+	}, {
 		"other build, higher timestamp",
 		map[string]string{
 			"owner":      "my-owner",
@@ -241,7 +241,7 @@ func buildLockCountWatch(client *fake.Clientset) chan int {
 	c := make(chan int, 100)
 	count := 0
 	client.PrependWatchReactor("*", func(action ktesting.Action) (handled bool, ret watch.Interface, err error) {
-		count ++
+		count++
 		c <- count
 		return false, nil, nil
 	})
@@ -251,7 +251,7 @@ func buildLockCountWatch(client *fake.Clientset) chan int {
 var buildLockUID int = 1 << 20 // the pid of out fake pods
 // buildLockPod creates a running pod, looking close enough to a pipeline pod
 func buildLockPod(t *testing.T, client kubernetes.Interface, owner, repository, branch, build string) *v1.Pod {
-	buildLockUID ++
+	buildLockUID++
 	pod, err := client.CoreV1().Pods("jx").Create(&v1.Pod{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Pod",
@@ -267,7 +267,7 @@ func buildLockPod(t *testing.T, client kubernetes.Interface, owner, repository, 
 				"build":                   build,
 				"jenkins.io/pipelineType": "build",
 			},
-			UID:        types.UID(fmt.Sprintf("%d", buildLockUID)),
+			UID: types.UID(fmt.Sprintf("%d", buildLockUID)),
 		},
 		Status: v1.PodStatus{
 			Phase: v1.PodRunning,
@@ -322,13 +322,13 @@ func buildLockTimestamp(minutes int) string {
 // buildLockEnv prepares the environment for calling AcquireBuildLock
 // returns a defer function to restore the environment
 func buildLockEnv(t *testing.T, owner, repository, branch, build string) func() {
-	env := map[string]string {
+	env := map[string]string{
 		"REPO_OWNER":   owner,
 		"REPO_NAME":    repository,
 		"BRANCH_NAME":  branch,
 		"BUILD_NUMBER": build,
 	}
-	old := map[string]string {}
+	old := map[string]string{}
 	for k, v := range env {
 		old[k] = os.Getenv(k)
 		err := os.Setenv(k, v)
@@ -352,7 +352,7 @@ func buildLockAcquire(t *testing.T, client kubernetes.Interface, namespace strin
 	clean := buildLockEnv(t, pod.Labels["owner"], pod.Labels["repository"], pod.Labels["branch"], pod.Labels["build"])
 	go func() {
 		callback, err := AcquireBuildLock(client, "jx", namespace)
-		c <- func () {
+		c <- func() {
 			if !fails {
 				require.NoError(t, err)
 				assert.NoError(t, callback())
@@ -362,7 +362,7 @@ func buildLockAcquire(t *testing.T, client kubernetes.Interface, namespace strin
 		}
 	}()
 	go func() {
-		time.Sleep(time.Duration(5)*time.Second)
+		time.Sleep(time.Duration(5) * time.Second)
 		c <- nil
 	}()
 	return clean, c
@@ -370,7 +370,7 @@ func buildLockAcquire(t *testing.T, client kubernetes.Interface, namespace strin
 
 // builLockCheck checks if the lock configmap is matching the given pod
 func builLockCheck(t *testing.T, client kubernetes.Interface, namespace string, pod *v1.Pod) {
-	lock, err := client.CoreV1().ConfigMaps("jx").Get("jx-lock-" + namespace, metav1.GetOptions{})
+	lock, err := client.CoreV1().ConfigMaps("jx").Get("jx-lock-"+namespace, metav1.GetOptions{})
 	if pod == nil {
 		assert.Nil(t, lock)
 		if assert.Error(t, err) {
@@ -414,7 +414,7 @@ func TestAcquireBuildLock(t *testing.T) {
 	pod := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "13")
 	clean, channel := buildLockAcquire(t, client, "my-namespace", pod, false)
 	defer clean()
-	callback := <- channel
+	callback := <-channel
 	require.NotNil(t, callback, "timeout")
 	builLockCheck(t, client, "my-namespace", pod)
 	callback()
@@ -433,7 +433,7 @@ func TestAcquireBuildLock_invalidLock(t *testing.T) {
 	pod := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "13")
 	clean, channel := buildLockAcquire(t, client, "my-namespace", pod, false)
 	defer clean()
-	callback := <- channel
+	callback := <-channel
 	require.NotNil(t, callback, "timeout")
 	builLockCheck(t, client, "my-namespace", pod)
 	callback()
@@ -451,7 +451,7 @@ func TestAcquireBuildLock_previousNotFound(t *testing.T) {
 	pod := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "13")
 	clean, channel := buildLockAcquire(t, client, "my-namespace", pod, false)
 	defer clean()
-	callback := <- channel
+	callback := <-channel
 	require.NotNil(t, callback, "timeout")
 	builLockCheck(t, client, "my-namespace", pod)
 	callback()
@@ -470,7 +470,7 @@ func TestAcquireBuildLock_previousFinished(t *testing.T) {
 	pod := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "13")
 	clean, channel := buildLockAcquire(t, client, "my-namespace", pod, false)
 	defer clean()
-	callback := <- channel
+	callback := <-channel
 	require.NotNil(t, callback, "timeout")
 	builLockCheck(t, client, "my-namespace", pod)
 	callback()
@@ -486,7 +486,7 @@ func TestAcquireBuildLock_higherRuns(t *testing.T) {
 	pod := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "13")
 	clean, channel := buildLockAcquire(t, client, "my-namespace", pod, true)
 	defer clean()
-	callback := <- channel
+	callback := <-channel
 	callback()
 }
 
@@ -499,7 +499,7 @@ func TestAcquireBuildLock_laterRuns(t *testing.T) {
 	pod := buildLockPod(t, client, "my-owner", "my-repository", "my-branch", "13")
 	clean, channel := buildLockAcquire(t, client, "my-namespace", pod, true)
 	defer clean()
-	callback := <- channel
+	callback := <-channel
 	callback()
 }
 
@@ -517,8 +517,8 @@ func TestAcquireBuildLock_waitLowerPodDeleted(t *testing.T) {
 	for {
 		count := 0
 		select {
-		case count = <- counter:
-		case callback := <- channel:
+		case count = <-counter:
+		case callback := <-channel:
 			require.NotNil(t, callback, "timeout")
 			assert.Fail(t, "TestAcquireBuildLock returned")
 			callback()
@@ -542,7 +542,7 @@ func TestAcquireBuildLock_waitLowerPodDeleted(t *testing.T) {
 	// should acquire the lock
 	err = client.CoreV1().Pods("jx").Delete(previous.Name, &metav1.DeleteOptions{})
 	require.NoError(t, err)
-	callback := <- channel
+	callback := <-channel
 	require.NotNil(t, callback, "timeout")
 	builLockCheck(t, client, "my-namespace", pod)
 	callback()
@@ -563,8 +563,8 @@ func TestAcquireBuildLock_waitLowerLockDeleted(t *testing.T) {
 	for {
 		count := 0
 		select {
-		case count = <- counter:
-		case callback := <- channel:
+		case count = <-counter:
+		case callback := <-channel:
 			require.NotNil(t, callback, "timeout")
 			assert.Fail(t, "TestAcquireBuildLock returned")
 			callback()
@@ -588,7 +588,7 @@ func TestAcquireBuildLock_waitLowerLockDeleted(t *testing.T) {
 	// should acquire the lock
 	err = client.CoreV1().ConfigMaps("jx").Delete(old.Name, &metav1.DeleteOptions{})
 	require.NoError(t, err)
-	callback := <- channel
+	callback := <-channel
 	require.NotNil(t, callback, "timeout")
 	builLockCheck(t, client, "my-namespace", pod)
 	callback()
@@ -609,8 +609,8 @@ func TestAcquireBuildLock_waitEarlierFinished(t *testing.T) {
 	for {
 		count := 0
 		select {
-		case count = <- counter:
-		case callback := <- channel:
+		case count = <-counter:
+		case callback := <-channel:
 			require.NotNil(t, callback, "timeout")
 			assert.Fail(t, "TestAcquireBuildLock returned")
 			callback()
@@ -638,7 +638,7 @@ func TestAcquireBuildLock_waitEarlierFinished(t *testing.T) {
 	previous.Status.Phase = v1.PodSucceeded
 	_, err = client.CoreV1().Pods("jx").Update(previous)
 	require.NoError(t, err)
-	callback := <- channel
+	callback := <-channel
 	require.NotNil(t, callback, "timeout")
 	builLockCheck(t, client, "my-namespace", pod)
 	callback()
@@ -659,8 +659,8 @@ func TestAcquireBuildLock_waitButHigher(t *testing.T) {
 	for {
 		count := 0
 		select {
-		case count = <- counter:
-		case callback := <- channel:
+		case count = <-counter:
+		case callback := <-channel:
 			require.NotNil(t, callback, "timeout")
 			assert.Fail(t, "TestAcquireBuildLock returned")
 			callback()
@@ -688,7 +688,7 @@ func TestAcquireBuildLock_waitButHigher(t *testing.T) {
 	lock.Data["build"] = "21"
 	_, err = client.CoreV1().ConfigMaps("jx").Update(lock)
 	require.NoError(t, err)
-	callback := <- channel
+	callback := <-channel
 	require.NotNil(t, callback, "timeout")
 	callback()
 }
