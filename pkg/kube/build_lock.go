@@ -34,89 +34,10 @@ func AcquireBuildLock(kubeClient kubernetes.Interface, devNamespace, namespace s
 		log.Logger().Infof("lock cancelled because not running in tekton")
 		return func() error { return nil }, nil
 	}
-	// Get infos from the headers
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	owner := os.Getenv("REPO_OWNER")
-	if owner == "" {
-		log.Logger().Warnf("no REPO_OWNER provided")
-		return nil, fmt.Errorf("no REPO_OWNER provided")
-	}
-	repository := os.Getenv("REPO_NAME")
-	if repository == "" {
-		log.Logger().Warnf("no REPO_NAME provided")
-		return nil, fmt.Errorf("no REPO_NAME provided")
-	}
-	branch := os.Getenv("BRANCH_NAME")
-	if branch == "" {
-		log.Logger().Warnf("no BRANCH_NAME provided")
-		return nil, fmt.Errorf("no BRANCH_NAME provided")
-	}
-	build := os.Getenv("BUILD_NUMBER")
-	if _, err := strconv.Atoi(build); err != nil {
-		log.Logger().Warnf("no BUILD_NUMBER provided: %s\n", err.Error())
-		return nil, err
-	}
-	// Find our pod
-	podList, err := kubeClient.CoreV1().Pods(devNamespace).List(metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("owner=%s,repository=%s,branch=%s,build=%s,jenkins.io/pipelineType=build", owner, repository, branch, build),
-	})
+	// Create the lock object
+	lock, err := makeBuildLock(kubeClient, devNamespace, namespace)
 	if err != nil {
 		return nil, err
-	} else if len(podList.Items) != 1 {
-		return nil, fmt.Errorf("%d pods found for this job (owner=%s,repository=%s,branch=%s,build=%s,jenkins.io/pipelineType=build)",
-			len(podList.Items), owner, repository, branch, build)
-	}
-	pod := &podList.Items[0]
-	// kubernetes library seems to forget APIVersoin and Kind
-	// fill those if they're missing
-	if pod.APIVersion == "" {
-		pod.APIVersion = "v1"
-	}
-	if pod.Kind == "" {
-		pod.Kind = "Pod"
-	}
-	podKind := pod.Kind
-	// Create the lock object
-	lock := &v1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("jx-lock-%s", namespace),
-			Namespace: devNamespace,
-			Labels: map[string]string{
-				"namespace":  namespace,
-				"owner":      owner,
-				"repository": repository,
-				"branch":     branch,
-				"build":      build,
-			},
-			Annotations: map[string]string{
-				"jenkins-x.io/created-by": "Jenkins X",
-				"warning":                 "DO NOT REMOVE",
-				"purpose": fmt.Sprintf("This is a deployment lock for the "+
-					"namespace \"%s\". It prevents several deployments to "+
-					"edit the same namespace at the same time. It will "+
-					"automatically be removed once the deployemnt is "+
-					"finished, or replaced by the next deployemnt to run.",
-					namespace),
-			},
-			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: pod.APIVersion,
-				Kind:       pod.Kind,
-				Name:       pod.Name,
-				UID:        pod.UID,
-			}},
-		},
-		Data: map[string]string{
-			"namespace":  namespace,
-			"owner":      owner,
-			"repository": repository,
-			"branch":     branch,
-			"build":      build,
-			"pod":        pod.Name,
-			"timestamp":  now,
-		},
-	}
-	for k, v := range buildLockLabels {
-		lock.Labels[k] = v
 	}
 	// this loop continuously tries to create the lock
 Create:
@@ -171,52 +92,12 @@ Create:
 					return nil, err
 				}
 			}
-			// check if the lock should not simply be removed
-			remove := false
-			// check the lock
-			for k, v := range buildLockLabels {
-				if old.Labels[k] != v {
-					log.Logger().Warnf("the lock %s should have annotation \"%s: %s\"", old.Name, k, v)
-					remove = true
-				}
-			}
-			if !remove && old.Labels["namespace"] != namespace {
-				log.Logger().Warnf("the lock %s should have label \"namespace: %s\"", old.Name, namespace)
-				remove = true
-			}
-			var owner *metav1.OwnerReference
-			if !remove {
-				if len(old.OwnerReferences) != 1 {
-					log.Logger().Warnf("the lock %s has %d OwnerReferences", old.Name, len(old.OwnerReferences))
-					remove = true
-				} else if owner = &old.OwnerReferences[0]; owner.Kind != podKind || owner.Name == "" {
-					log.Logger().Warnf("the lock %s has invalid OwnerReference %v", old.Name, owner)
-					remove = true
-				}
-			}
-			// get the current locking pod if not already provided
-			if !remove && (pod == nil || pod.Name != owner.Name) {
-				pod, err = kubeClient.CoreV1().Pods(devNamespace).Get(owner.Name, metav1.GetOptions{})
-				if err != nil {
-					status, ok := err.(*errors.StatusError)
-					// the pod does not exist anymore, the lock should be removed
-					if ok && status.Status().Reason == metav1.StatusReasonNotFound {
-						log.Logger().Infof("locking pod %s finished", owner.Name)
-						remove = true
-						// an error while getting the pod
-					} else {
-						log.Logger().Warnf("failed to get the locking pod %s: %s\n", old.Data["pod"], err.Error())
-						return nil, err
-					}
-				}
-			}
-			// check the pod's phase
-			if !remove && pod != nil {
-				log.Logger().Infof("locking pod %s is in phase %s", pod.Name, pod.Status.Phase)
-				remove = pod.Status.Phase != v1.PodPending && pod.Status.Phase != v1.PodRunning
-			}
-			// remove the lock
-			if remove {
+			// get the locking pod
+			pod, err = getLockingPod(kubeClient, namespace, old, pod)
+			if err != nil {
+				return nil, err
+				// the lock should simply be removed
+			} else if pod == nil {
 				log.Logger().Infof("cleaning the old lock configmap %s", lock.Name)
 				err := kubeClient.CoreV1().ConfigMaps(devNamespace).Delete(lock.Name,
 					&metav1.DeleteOptions{
@@ -279,6 +160,143 @@ Create:
 			}
 		}
 	}
+}
+
+// makeBuildLock make the lock configmap of the current build
+func makeBuildLock(kubeClient kubernetes.Interface, devNamespace, namespace string) (*v1.ConfigMap, error) {
+	// Get infos from the headers
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	owner := os.Getenv("REPO_OWNER")
+	if owner == "" {
+		log.Logger().Warnf("no REPO_OWNER provided")
+		return nil, fmt.Errorf("no REPO_OWNER provided")
+	}
+	repository := os.Getenv("REPO_NAME")
+	if repository == "" {
+		log.Logger().Warnf("no REPO_NAME provided")
+		return nil, fmt.Errorf("no REPO_NAME provided")
+	}
+	branch := os.Getenv("BRANCH_NAME")
+	if branch == "" {
+		log.Logger().Warnf("no BRANCH_NAME provided")
+		return nil, fmt.Errorf("no BRANCH_NAME provided")
+	}
+	build := os.Getenv("BUILD_NUMBER")
+	if _, err := strconv.Atoi(build); err != nil {
+		log.Logger().Warnf("no BUILD_NUMBER provided: %s\n", err.Error())
+		return nil, err
+	}
+	// Find our pod
+	podList, err := kubeClient.CoreV1().Pods(devNamespace).List(metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("owner=%s,repository=%s,branch=%s,build=%s,jenkins.io/pipelineType=build", owner, repository, branch, build),
+	})
+	if err != nil {
+		return nil, err
+	} else if len(podList.Items) != 1 {
+		return nil, fmt.Errorf("%d pods found for this job (owner=%s,repository=%s,branch=%s,build=%s,jenkins.io/pipelineType=build)",
+			len(podList.Items), owner, repository, branch, build)
+	}
+	pod := &podList.Items[0]
+	// kubernetes library seems to forget APIVersoin and Kind
+	// fill those if they're missing
+	if pod.APIVersion == "" {
+		pod.APIVersion = "v1"
+	}
+	if pod.Kind == "" {
+		pod.Kind = "Pod"
+	}
+	// Create the lock object
+	lock := &v1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("jx-lock-%s", namespace),
+			Namespace: devNamespace,
+			Labels: map[string]string{
+				"namespace":  namespace,
+				"owner":      owner,
+				"repository": repository,
+				"branch":     branch,
+				"build":      build,
+			},
+			Annotations: map[string]string{
+				"jenkins-x.io/created-by": "Jenkins X",
+				"warning":                 "DO NOT REMOVE",
+				"purpose": fmt.Sprintf("This is a deployment lock for the "+
+					"namespace \"%s\". It prevents several deployments to "+
+					"edit the same namespace at the same time. It will "+
+					"automatically be removed once the deployemnt is "+
+					"finished, or replaced by the next deployemnt to run.",
+					namespace),
+			},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: pod.APIVersion,
+				Kind:       pod.Kind,
+				Name:       pod.Name,
+				UID:        pod.UID,
+			}},
+		},
+		Data: map[string]string{
+			"namespace":  namespace,
+			"owner":      owner,
+			"repository": repository,
+			"branch":     branch,
+			"build":      build,
+			"pod":        pod.Name,
+			"timestamp":  now,
+		},
+	}
+	for k, v := range buildLockLabels {
+		lock.Labels[k] = v
+	}
+	return lock, nil
+}
+
+// getLockingPod checks the lock and return its locking pod
+// receives the previously known pod, to avoid refreshing it if not needed
+// Returns nil if the lock should be removed (because the lock is invalid,
+// or its pod is missing or finished)
+func getLockingPod(kubeClient kubernetes.Interface, namespace string, lock *v1.ConfigMap, pod *v1.Pod) (*v1.Pod, error) {
+	// check the lock
+	for k, v := range buildLockLabels {
+		if lock.Labels[k] != v {
+			log.Logger().Warnf("the lock %s should have annotation \"%s: %s\"", lock.Name, k, v)
+			return nil, nil
+		}
+	}
+	if lock.Labels["namespace"] != namespace {
+		log.Logger().Warnf("the lock %s should have label \"namespace: %s\"", lock.Name, namespace)
+		return nil, nil
+	}
+	var owner *metav1.OwnerReference
+	if len(lock.OwnerReferences) != 1 {
+		log.Logger().Warnf("the lock %s has %d OwnerReferences", lock.Name, len(lock.OwnerReferences))
+		return nil, nil
+	} else if owner = &lock.OwnerReferences[0]; owner.Kind != "Pod" || owner.Name == "" {
+		log.Logger().Warnf("the lock %s has invalid OwnerReference %v", lock.Name, owner)
+		return nil, nil
+	}
+	// get the current locking pod if not already provided
+	if pod == nil || pod.Name != owner.Name {
+		var err error
+		pod, err = kubeClient.CoreV1().Pods(lock.Namespace).Get(owner.Name, metav1.GetOptions{})
+		if err != nil {
+			status, ok := err.(*errors.StatusError)
+			// the pod does not exist anymore, the lock should be removed
+			if ok && status.Status().Reason == metav1.StatusReasonNotFound {
+				log.Logger().Infof("locking pod %s finished", owner.Name)
+				return nil, nil
+				// an error while getting the pod
+			} else {
+				log.Logger().Warnf("failed to get the locking pod %s: %s\n", lock.Data["pod"], err.Error())
+				return nil, err
+			}
+		}
+	}
+	// check the pod's phase
+	log.Logger().Infof("locking pod %s is in phase %s", pod.Name, pod.Status.Phase)
+	if pod.Status.Phase != v1.PodPending && pod.Status.Phase != v1.PodRunning {
+		return nil, nil
+	}
+	return pod, nil
 }
 
 // watchBuildLock watches a lock configmap and its locking pod to detect any change
