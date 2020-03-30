@@ -383,7 +383,7 @@ func buildLockEnv(t *testing.T, owner, repository, branch, build string, interpr
 		require.NoError(t, err)
 	}
 	return func() {
-		for k, _ := range env {
+		for k := range env {
 			v, ok := old[k]
 			var err error
 			if ok {

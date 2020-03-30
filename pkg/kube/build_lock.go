@@ -349,8 +349,8 @@ func watchBuildLock(kubeClient kubernetes.Interface, lock *v1.ConfigMap, pod *v1
 		if remaining <= time.Duration(0) {
 			return lock, nil
 		}
-		log.Logger().Infof("waiting for the lock configmap %s for %s. " +
-			"if you are sure that the local build %s/%s #%s has finished, " +
+		log.Logger().Infof("waiting for the lock configmap %s for %s. "+
+			"if you are sure that the local build %s/%s #%s has finished, "+
 			"you can clean the lock with\n\t`kubectl delete configmap -n %s %s`",
 			lock.Name, remaining.Round(time.Second), lock.Labels["repository"],
 			lock.Labels["branch"], lock.Labels["build"], lock.Namespace, lock.Name)
