@@ -270,7 +270,7 @@ func makeBuildLock(kubeClient kubernetes.Interface, devNamespace, namespace stri
 // receives the previously known pod, to avoid refreshing it if not needed
 // Returns true if the lock should be removed (because the lock is invalid,
 // or its pod is missing or finished)
-// Retuns the pod if one is running, or nil if running locally
+// Returns the pod if one is running, or nil if running locally
 func getLockingPod(kubeClient kubernetes.Interface, namespace string, lock *v1.ConfigMap, pod *v1.Pod) (bool, *v1.Pod, error) {
 	// check the lock
 	for k, v := range buildLockLabels {
