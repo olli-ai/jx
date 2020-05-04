@@ -7,6 +7,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+func GetService()
+
 // FindServiceURL finds the service URL for the given knative service name
 func FindServiceURL(client kserve.Interface, kubeClient kubernetes.Interface, namespace string, name string) (string, *v1alpha1.Service, error) {
 	if client == nil {

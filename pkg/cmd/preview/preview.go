@@ -73,7 +73,14 @@ const (
 	optionPostPreviewJobTimeout  = "post-preview-job-timeout"
 	optionPostPreviewJobPollTime = "post-preview-poll-time"
 	optionPreviewHealthTimeout   = "preview-health-timeout"
+
+	protocolHTTP =      "HTTP"
+	protocolHTTPS =     "HTTPS"
+	protocolGRPC =      "GRPC"
+	protocolGRPCunsec = "GRPC-unsecured"
+	protocolTCP =       "TCP"
 )
+availabilityCheckProtocols = []string{protocolHTTP, protocolHTTPS, protocolGRPC, protocolGRPCunsec, protocolTCP}
 
 // PreviewOptions the options for viewing running PRs
 type PreviewOptions struct {
@@ -105,6 +112,14 @@ type PreviewOptions struct {
 	PreviewHealthTimeoutDuration  time.Duration
 
 	HelmValuesConfig config.HelmValuesConfig
+
+	SkipAvailabilityCheck     bool
+	AvailabilityCheckProtocol string
+	AvailabilityCheckService  string
+	AvailabilityCheckIngress  string
+	AvailabilityCheckHost     string
+	AvailabilityCheckPort     string
+	AvailabilityCheckPath     string
 }
 
 // NewCmdPreview creates a command object for the "create" command
@@ -159,6 +174,13 @@ func (o *PreviewOptions) AddPreviewOptions(cmd *cobra.Command) {
 	cmd.Flags().StringVarP(&o.PostPreviewJobPollTime, optionPostPreviewJobPollTime, "", "10s", "The amount of time between polls for the post preview Job status")
 	cmd.Flags().StringVarP(&o.PreviewHealthTimeout, optionPreviewHealthTimeout, "", "5m", "The amount of time to wait for the preview application to become healthy")
 	cmd.Flags().BoolVarP(&o.NoComment, "no-comment", "", false, "Disables commenting on the Pull Request after preview is created.")
+	cmd.Flags().BoolVarP(&o.SkipAvailabilityCheck, "skip-availability-check", "", false, "Disables the mandatory availability check.")
+	cmd.Flags().StringVarP(&o.AvailabilityCheckProtocol, "availability-check-protocol", "", "", "The protocol to check the availability. Are currently recognized: " + strings.Join(availabilityCheckProtocols, ", "))
+	cmd.Flags().StringVarP(&o.AvailabilityCheckService, "availability-check-service", "", "", "The service to test for availability")
+	cmd.Flags().StringVarP(&o.AvailabilityCheckIngress, "availability-check-ingress", "", "", "The ingress to test for availability")
+	cmd.Flags().StringVarP(&o.AvailabilityCheckPort, "availability-check-host", "", "", "The host to use for availability request")
+	cmd.Flags().StringVarP(&o.AvailabilityCheckHost, "availability-check-port", "", "", "The port to use for availability request")
+	cmd.Flags().StringVarP(&o.AvailabilityCheckPath, "availability-check-path", "", "", "The path to use for availability request")
 }
 
 // Run implements the command

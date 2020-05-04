@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,6 +27,7 @@ import (
 const (
 	ExposeAnnotation             = "fabric8.io/expose"
 	ExposeURLAnnotation          = "fabric8.io/exposeUrl"
+	ExposePortAnnotation          = "fabric8.io/exposePort"
 	ExposeGeneratedByAnnotation  = "fabric8.io/generated-by"
 	ExposeIngressName            = "fabric8.io/ingress.name"
 	JenkinsXSkipTLSAnnotation    = "jenkins-x.io/skip.tls"
@@ -254,6 +256,42 @@ func GetServiceURL(svc *v1.Service) string {
 		}
 	}
 	return url
+}
+
+// GetServiceURL returns the
+func GetServiceCheckURL(svc *v1.Service, protocol, host, port, path string) *url.URL {
+	var svcUrl *url.URL
+	if port == "" && svc.Annotations[ExposePortAnnotation] != "" {
+		i, err := strconv.ParseUint(svc.Annotations[ExposePortAnnotation])
+		if err != nil {
+			port = strconv.FormatUint(i, 10)
+		}
+	}
+	if port == "" && len(svc.Spec.Ports) > 0 {
+		port = strconv.FormatInt(int64(p), 10)
+		for _, p := range svc.Spec.Ports {
+			port = strconv.FormatInt(int64(p), 10)
+			break
+		}
+	}
+	if svc.Annotations[ExposeURLAnnotation] != "" {
+		u, err := url.Parse(svc.Annotations[ExposeURLAnnotation])
+		if err != nil && r.Scheme != "" && r.Host != "" {
+			svcUrl = u
+		}
+	}
+
+	// lets check if its a LoadBalancer
+	if svc.Spec.Type == v1.ServiceTypeLoadBalancer {
+		for _, ing := range svc.Status.LoadBalancer.Ingress {
+			if ing.IP != "" {
+				return scheme + "://" + ing.IP + "/"
+			}
+			if ing.Hostname != "" {
+				return scheme + "://" + ing.Hostname + "/"
+			}
+		}
+	}
 }
 
 // FindServiceSchemePort parses the service definition and interprets http scheme in the absence of an external ingress
