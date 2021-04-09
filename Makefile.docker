@@ -67,3 +67,38 @@ docker-dev-all: build linux docker-pull docker-build-and-push
 	docker push $(DOCKER_HUB_USER)/builder-python2:dev
 	docker build --no-cache -t $(DOCKER_HUB_USER)/builder-ruby:dev -f Dockerfile.builder-ruby .
 	docker push $(DOCKER_HUB_USER)/builder-ruby:dev
+
+DOCKER_HUB_USER?=olliai
+DOCKER_TAG?=dev
+
+docker-all: linux
+	docker build -t $(DOCKER_HUB_USER)/jx:$(DOCKER_TAG) .
+	docker push $(DOCKER_HUB_USER)/jx:$(DOCKER_TAG)
+	docker build -t $(DOCKER_HUB_USER)/builder-base:$(DOCKER_TAG) -f Dockerfile.builder-base .
+	docker push $(DOCKER_HUB_USER)/builder-base:$(DOCKER_TAG)
+	docker build -t $(DOCKER_HUB_USER)/builder-go:$(DOCKER_TAG) -f Dockerfile.builder-go .
+	docker push $(DOCKER_HUB_USER)/builder-go:$(DOCKER_TAG)
+	docker build -t $(DOCKER_HUB_USER)/builder-python:$(DOCKER_TAG) -f Dockerfile.builder-python .
+	docker push $(DOCKER_HUB_USER)/builder-python:$(DOCKER_TAG)
+	docker build -t $(DOCKER_HUB_USER)/builder-python2:$(DOCKER_TAG) -f Dockerfile.builder-python2 .
+	docker push $(DOCKER_HUB_USER)/builder-python2:$(DOCKER_TAG)
+	docker build -t $(DOCKER_HUB_USER)/builder-python37:$(DOCKER_TAG) -f Dockerfile.builder-python37 .
+	docker push $(DOCKER_HUB_USER)/builder-python37:$(DOCKER_TAG)
+	docker build -t $(DOCKER_HUB_USER)/builder-nodejs:$(DOCKER_TAG) -f Dockerfile.builder-nodejs .
+	docker push $(DOCKER_HUB_USER)/builder-nodejs:$(DOCKER_TAG)
+	docker build -t $(DOCKER_HUB_USER)/builder-nodejs8x:$(DOCKER_TAG) -f Dockerfile.builder-nodejs8x .
+	docker push $(DOCKER_HUB_USER)/builder-nodejs8x:$(DOCKER_TAG)
+	docker build -t $(DOCKER_HUB_USER)/builder-nodejs10x:$(DOCKER_TAG) -f Dockerfile.builder-nodejs10x .
+	docker push $(DOCKER_HUB_USER)/builder-nodejs10x:$(DOCKER_TAG)
+	docker build -t $(DOCKER_HUB_USER)/builder-nodejs12x:$(DOCKER_TAG) -f Dockerfile.builder-nodejs12x .
+	docker push $(DOCKER_HUB_USER)/builder-nodejs12x:$(DOCKER_TAG)
+	docker build -t $(DOCKER_HUB_USER)/builder-ruby:$(DOCKER_TAG) -f Dockerfile.builder-ruby .
+	docker push $(DOCKER_HUB_USER)/builder-ruby:$(DOCKER_TAG)
+	docker build -t $(DOCKER_HUB_USER)/builder-php5x:$(DOCKER_TAG) -f Dockerfile.builder-php5x .
+	docker push $(DOCKER_HUB_USER)/builder-php5x:$(DOCKER_TAG)
+	docker build -t $(DOCKER_HUB_USER)/builder-php7x:$(DOCKER_TAG) -f Dockerfile.builder-php7x .
+	docker push $(DOCKER_HUB_USER)/builder-php7x:$(DOCKER_TAG)
+
+docker-python37: linux
+	docker build -t $(DOCKER_HUB_USER)/builder-python37:$(DOCKER_TAG) -f Dockerfile.builder-python37 .
+	docker push $(DOCKER_HUB_USER)/builder-python37:$(DOCKER_TAG)

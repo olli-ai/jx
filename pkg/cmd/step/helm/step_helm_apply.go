@@ -313,7 +313,7 @@ func (o *StepHelmApplyOptions) Run() error {
 		}
 	}
 
-	_, err = o.HelmInitDependencyBuild(dir, o.DefaultReleaseCharts(), valueFiles)
+	err = o.HelmInitDependencyBuild(dir, o.DefaultReleaseCharts(), valueFiles)
 	if err != nil {
 		return err
 	}

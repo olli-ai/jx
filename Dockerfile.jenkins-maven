@@ -1,3 +1,4 @@
 FROM jenkinsxio/jenkins-maven:256.0.66
 
+RUN cp /home/jenkins/.jx/bin/helm3 /usr/bin/helm3
 COPY build/linux/jx /usr/bin/jx

@@ -38,7 +38,7 @@ var (
 		jx step create pr versions -n jenkins-x/prow -v 1.2.3
 
 		# create a Pull Request to update a chart versionstream to the latest found in the helm repo
-		jx step create pr versions -n jenkins-x/prow 
+		jx step create pr versions -n jenkins-x/prow
 
 		# create a Pull Request to update all charts matching a filter to the latest found in the helm repo
 		jx step create pr versions pr -f "*"
@@ -224,7 +224,7 @@ func (o *StepCreatePullRequestVersionsOptions) Run() error {
 	return o.CreatePullRequest("versionstream", func(dir string, gitInfo *gits.GitRepository) ([]string, error) {
 		for _, kind := range o.Kinds {
 			if versionstream.VersionKind(kind) == versionstream.KindChart {
-				_, err := o.HelmInitDependency(dir, o.DefaultReleaseCharts())
+				err := o.HelmInitDependency(dir, o.DefaultReleaseCharts())
 				if err != nil {
 					return nil, errors.Wrap(err, "failed to ensure the helm repositories were setup")
 				}

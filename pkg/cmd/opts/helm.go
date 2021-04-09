@@ -613,78 +613,64 @@ func (o *CommonOptions) HelmInit(dir string) error {
 }
 
 // HelmInitDependency initialises helm dependencies
-func (o *CommonOptions) HelmInitDependency(dir string, chartRepos []string) (string, error) {
+func (o *CommonOptions) HelmInitDependency(dir string, chartRepos []string) error {
 	o.Helm().SetCWD(dir)
 	err := o.Helm().RemoveRequirementsLock()
 	if err != nil {
-		return o.Helm().HelmBinary(),
-			errors.Wrapf(err, "failed to remove requirements.lock file from chart '%s'", dir)
+		return errors.Wrapf(err, "failed to remove requirements.lock file from chart '%s'", dir)
 	}
 
-	if o.Helm().HelmBinary() == "helm" {
-		// need to check the tiller settings at this point
-		_, noTiller, helmTemplate, err := o.TeamHelmBin()
-		if err != nil {
-			return o.Helm().HelmBinary(),
-				errors.Wrap(err, "failed to access team settings")
-		}
+	_, noTiller, helmTemplate, err := o.TeamHelmBin()
+	if err != nil {
+		return errors.Wrap(err, "failed to access team settings")
+	}
 
-		if noTiller || helmTemplate {
-			err = o.Helm().Init(true, "", "", false)
-		} else {
-			err = o.Helm().Init(false, "", "", true)
-		}
+	if noTiller || helmTemplate {
+		err = o.Helm().Init(true, "", "", false)
 	} else {
-		err = o.Helm().Init(false, "", "", false)
+		err = o.Helm().Init(false, "", "", true)
 	}
 
 	if err != nil {
-		return o.Helm().HelmBinary(),
-			errors.Wrap(err, "failed to initialize Helm")
+		return errors.Wrap(err, "failed to initialize Helm")
 	}
 	err = o.AddChartRepos(dir, o.Helm().HelmBinary(), chartRepos)
 	if err != nil {
-		return o.Helm().HelmBinary(),
-			errors.Wrap(err, "failed to add chart repositories")
+		return errors.Wrap(err, "failed to add chart repositories")
 	}
 
-	return o.Helm().HelmBinary(), nil
+	return nil
 }
 
 // HelmInitDependencyBuild initialises the dependencies and runs the build
-func (o *CommonOptions) HelmInitDependencyBuild(dir string, chartRepos []string, valuesFiles []string) (string, error) {
-	helmBin, err := o.HelmInitDependency(dir, chartRepos)
+func (o *CommonOptions) HelmInitDependencyBuild(dir string, chartRepos []string, valuesFiles []string) error {
+	err := o.HelmInitDependency(dir, chartRepos)
 	if err != nil {
-		return helmBin, err
+		return err
 	}
 	// TODO due to this issue: https://github.com/kubernetes/helm/issues/4230
 	// lets stick with helm2 for this step
 	//
-	helmBinary := o.Helm().HelmBinary()
-	o.Helm().SetHelmBinary("helm")
 	o.Helm().SetCWD(dir)
 	err = o.Helm().BuildDependency()
 	if err != nil {
-		return helmBinary, errors.Wrapf(err, "failed to build the dependencies of chart '%s'", dir)
+		return errors.Wrapf(err, "failed to build the dependencies of chart '%s'", dir)
 	}
 
-	o.Helm().SetHelmBinary(helmBinary)
 	_, err = o.Helm().Lint(valuesFiles)
 	if err != nil {
-		return helmBinary, errors.Wrapf(err, "failed to lint the chart '%s'", dir)
+		return errors.Wrapf(err, "failed to lint the chart '%s'", dir)
 	}
-	return helmBinary, nil
+	return nil
 }
 
 // HelmInitRecursiveDependencyBuild helm initialises the dependencies recursively
 func (o *CommonOptions) HelmInitRecursiveDependencyBuild(dir string, chartRepos []string, valuesFiles []string) error {
-	_, err := o.HelmInitDependency(dir, chartRepos)
+	err := o.HelmInitDependency(dir, chartRepos)
 	if err != nil {
 		return errors.Wrap(err, "initializing Helm")
 	}
 
-	helmBinary := o.Helm().HelmBinary()
-	o.Helm().SetHelmBinary("helm")
 	o.Helm().SetCWD(dir)
 	err = o.Helm().BuildDependency()
 	if err != nil {
@@ -736,6 +722,10 @@ func (o *CommonOptions) HelmInitRecursiveDependencyBuild(dir string, chartRepos 
 			if err != nil {
 				return errors.Wrap(err, "removing chart archive")
 			}
+			err = o.HelmInitDependency(chartPath, chartRepos)
+			if err != nil {
+				return errors.Wrap(err, "initializing Helm")
+			}
 			o.Helm().SetCWD(chartPath)
 			err = o.Helm().BuildDependency()
 			if err != nil {
@@ -755,7 +745,6 @@ func (o *CommonOptions) HelmInitRecursiveDependencyBuild(dir string, chartRepos 
 		}
 	}
 
-	o.Helm().SetHelmBinary(helmBinary)
 	_, err = o.Helm().Lint(valuesFiles)
 	if err != nil {
 		return errors.Wrapf(err, "linting the chart '%s'", dir)

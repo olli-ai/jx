@@ -1,3 +1,4 @@
-FROM gcr.io/jenkinsxio/builder-jx:latest
+FROM gcr.io/jenkinsxio/builder-jx:2.1.155-778
 
+RUN cp /home/jenkins/.jx/bin/helm3 /usr/bin/helm3
 COPY build/linux/jx /usr/bin/jx

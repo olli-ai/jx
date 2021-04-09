@@ -31,6 +31,9 @@ type HelmCLI struct {
 
 // NewHelmCLIWithRunner creates a new HelmCLI interface for the given runner
 func NewHelmCLIWithRunner(runner util.Commander, binary string, version Version, cwd string, debug bool, kuber kube.Kuber) *HelmCLI {
+	if binary == "helm3" {
+		version = V3
+	}
 	cli := &HelmCLI{
 		Binary:     binary,
 		BinVersion: version,
@@ -54,6 +57,9 @@ func NewHelmCLI(binary string, version Version, cwd string, debug bool, args ...
 		Args: a,
 		Name: binary,
 		Dir:  cwd,
+	}
+	if binary == "helm3" {
+		version = V3
 	}
 	cli := &HelmCLI{
 		Binary:     binary,
@@ -146,6 +152,9 @@ func (h *HelmCLI) runHelmWithOutput(args ...string) (string, error) {
 
 // Init executes the helm init command according with the given flags
 func (h *HelmCLI) Init(clientOnly bool, serviceAccount string, tillerNamespace string, upgrade bool) error {
+	if h.BinVersion == V3 {
+		return nil
+	}
 	args := []string{}
 	args = append(args, "init")
 	if clientOnly {
@@ -317,7 +326,7 @@ func (h *HelmCLI) InstallChart(chart string, releaseName string, ns string, vers
 	}
 
 	if timeout != -1 {
-		if h.Binary == "helm3" {
+		if h.BinVersion == V3 {
 			args = append(args, "--timeout", fmt.Sprintf("%ss", strconv.Itoa(timeout)))
 		} else {
 			args = append(args, "--timeout", strconv.Itoa(timeout))
@@ -402,7 +411,13 @@ func (h *HelmCLI) FetchChart(chart string, version string, untar bool, untardir 
 // Template generates the YAML from the chart template to the given directory
 func (h *HelmCLI) Template(chart string, releaseName string, ns string, outDir string, upgrade bool,
 	values []string, valueStrings []string, valueFiles []string) error {
-	args := []string{"template", "--name", releaseName, "--namespace", ns, chart, "--output-dir", outDir, "--debug"}
+	args := []string{"template", "--namespace", ns}
+	if h.BinVersion == V3 {
+		args = append(args, "--release-name", releaseName)
+	} else {
+		args = append(args, "--name", releaseName)
+	}
+	args = append(args, chart, "--output-dir", outDir, "--debug")
 	if upgrade {
 		args = append(args, "--is-upgrade")
 	}
