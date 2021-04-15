@@ -76,6 +76,8 @@ docker-all: linux
 	docker push $(DOCKER_HUB_USER)/jx:$(DOCKER_TAG)
 	docker build -t $(DOCKER_HUB_USER)/builder-base:$(DOCKER_TAG) -f Dockerfile.builder-base .
 	docker push $(DOCKER_HUB_USER)/builder-base:$(DOCKER_TAG)
+	docker build -t $(DOCKER_HUB_USER)/builder-jx:$(DOCKER_TAG) -f Dockerfile.builder-jx .
+	docker push $(DOCKER_HUB_USER)/builder-jx:$(DOCKER_TAG)
 	docker build -t $(DOCKER_HUB_USER)/builder-go:$(DOCKER_TAG) -f Dockerfile.builder-go .
 	docker push $(DOCKER_HUB_USER)/builder-go:$(DOCKER_TAG)
 	docker build -t $(DOCKER_HUB_USER)/builder-python:$(DOCKER_TAG) -f Dockerfile.builder-python .
