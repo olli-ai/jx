@@ -68,7 +68,7 @@ docker-dev-all: build linux docker-pull docker-build-and-push
 	docker build --no-cache -t $(DOCKER_HUB_USER)/builder-ruby:dev -f Dockerfile.builder-ruby .
 	docker push $(DOCKER_HUB_USER)/builder-ruby:dev
 
-DOCKER_HUB_USER?=olliai
+DOCKER_HUB_USER?=docker.jenkins-x-viettel.iviet.com
 DOCKER_TAG?=dev
 
 docker-all: linux
@@ -102,3 +102,7 @@ docker-all: linux
 docker-python37: linux
 	docker build -t $(DOCKER_HUB_USER)/builder-python37:$(DOCKER_TAG) -f Dockerfile.builder-python37 .
 	docker push $(DOCKER_HUB_USER)/builder-python37:$(DOCKER_TAG)
+
+docker-go: linux
+	docker build -t $(DOCKER_HUB_USER)/builder-go:$(DOCKER_TAG) -f Dockerfile.builder-go .
+	docker push $(DOCKER_HUB_USER)/builder-go:$(DOCKER_TAG)
