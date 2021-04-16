@@ -1,3 +1,8 @@
+HELM_VERSION?=3.4.2
+build/helm:
+	curl https://get.helm.sh/helm-v$(HELM_VERSION)-linux-amd64.tar.gz | \
+    tar -C build/ -xvz linux-amd64/helm --strip-components=1
+
 docker-test: ## Run the tests in a docker container
 	docker run --rm -v $(shell pwd):/go/src/github.com/jenkins-x/jx golang:1.11 sh -c "rm /usr/bin/git && cd /go/src/github.com/jenkins-x/jx && make test"
 
@@ -12,23 +17,23 @@ docker-test-integration: ## Run the integration tests in a docker container
 docker-test-slow-integration:
 	docker run --rm -v $(shell pwd):/go/src/github.com/jenkins-x/jx golang:1.11 sh -c "rm /usr/bin/git && cd /go/src/github.com/jenkins-x/jx && make test-slow-integration"
 
-docker: linux ## Build and push a docker image for Linux
+docker: linux build/helm ## Build and push a docker image for Linux
 	docker build -t rawlingsj/jx:dev207 .
 	docker push rawlingsj/jx:dev207
 
-docker-go: linux Dockerfile.builder-go ## Build a docker image for Go
+docker-go: linux build/helm Dockerfile.builder-go ## Build a docker image for Go
 	docker build --no-cache -t builder-go -f Dockerfile.builder-go .
 
-docker-maven: linux Dockerfile.builder-maven ## Build a docker image for maven
+docker-maven: linux build/helm Dockerfile.builder-maven ## Build a docker image for maven
 	docker build --no-cache -t builder-maven -f Dockerfile.builder-maven .
 
-jenkins-maven: linux Dockerfile.jenkins-maven
+jenkins-maven: linux build/helm Dockerfile.jenkins-maven
 	docker build --no-cache -t jenkins-maven -f Dockerfile.jenkins-maven .
 
-docker-jx: linux Dockerfile.builder-jx ## Build a docker image for jx builder
+docker-jx: linux build/helm Dockerfile.builder-jx ## Build a docker image for jx builder
 	docker build --no-cache -t builder-jx -f Dockerfile.builder-jx .
 
-docker-base: linux ## Build a docker base image
+docker-base: linux build/helm ## Build a docker base image
 	docker build -t rawlingsj/builder-base:dev16 . -f Dockerfile.builder-base
 
 docker-pull:
@@ -44,11 +49,11 @@ docker-build-and-push: ## Build and push all docker images
 	docker build --no-cache -t $(DOCKER_HUB_USER)/builder-go:dev -f Dockerfile.builder-go .
 	docker push $(DOCKER_HUB_USER)/builder-go:dev
 
-docker-dev: build linux docker-pull docker-build-and-push
+docker-dev: linux build/helm docker-pull docker-build-and-push
 
-docker-dev-no-pull: build linux docker-build-and-push
+docker-dev-no-pull: linux build/helm docker-build-and-push
 
-docker-dev-all: build linux docker-pull docker-build-and-push
+docker-dev-all: linux build/helm docker-pull docker-build-and-push
 	docker build --no-cache -t $(DOCKER_HUB_USER)/builder-gradle:dev -f Dockerfile.builder-gradle .
 	docker push $(DOCKER_HUB_USER)/builder-gradle:dev
 	docker build --no-cache -t $(DOCKER_HUB_USER)/builder-rust:dev -f Dockerfile.builder-rust .
@@ -71,7 +76,7 @@ docker-dev-all: build linux docker-pull docker-build-and-push
 DOCKER_HUB_USER?=docker.jenkins-x-viettel.iviet.com
 DOCKER_TAG?=dev
 
-docker-all: linux
+docker-all: linux build/helm
 	docker build -t $(DOCKER_HUB_USER)/jx:$(DOCKER_TAG) .
 	docker push $(DOCKER_HUB_USER)/jx:$(DOCKER_TAG)
 	docker build -t $(DOCKER_HUB_USER)/builder-base:$(DOCKER_TAG) -f Dockerfile.builder-base .
@@ -101,10 +106,10 @@ docker-all: linux
 	docker build -t $(DOCKER_HUB_USER)/builder-php7x:$(DOCKER_TAG) -f Dockerfile.builder-php7x .
 	docker push $(DOCKER_HUB_USER)/builder-php7x:$(DOCKER_TAG)
 
-docker-python37: linux
+docker-python37: linux build/helm
 	docker build -t $(DOCKER_HUB_USER)/builder-python37:$(DOCKER_TAG) -f Dockerfile.builder-python37 .
 	docker push $(DOCKER_HUB_USER)/builder-python37:$(DOCKER_TAG)
 
-docker-go: linux
+docker-go: linux build/helm
 	docker build -t $(DOCKER_HUB_USER)/builder-go:$(DOCKER_TAG) -f Dockerfile.builder-go .
 	docker push $(DOCKER_HUB_USER)/builder-go:$(DOCKER_TAG)

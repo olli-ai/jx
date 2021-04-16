@@ -1,5 +1,6 @@
 # this is used for testing jx inside a cluster in development
 FROM gcr.io/jenkinsxio/builder-machine-learning:0.1.662
 
-RUN cp /home/jenkins/.jx/bin/helm3 /usr/bin/helm3
+COPY build/helm /home/jenkins/.jx/bin/helm3
+COPY build/helm /usr/bin/helm3
 COPY build/linux/jx /usr/bin/jx

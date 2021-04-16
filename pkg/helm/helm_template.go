@@ -48,8 +48,12 @@ const (
 	// LabelAppVersion stores the chart's app version
 	LabelAppVersion = "jenkins.io/app-version"
 
-	hookFailed    = "hook-failed"
-	hookSucceeded = "hook-succeeded"
+	// LabelReleaseHookChartVersion stores the version for a hook
+	LabelReleaseHookChartVersion = "jenkins.io/hook-version"
+
+	hookFailed         = "hook-failed"
+	hookSucceeded      = "hook-succeeded"
+	beforeHookCreation = "before-hook-creation"
 
 	// resourcesSeparator is used to separate multiple objects stored in the same YAML file
 	resourcesSeparator = "---"
@@ -519,7 +523,9 @@ func (h *HelmTemplate) kubectlDeleteFile(ns string, file string) error {
 }
 
 func (h *HelmTemplate) deleteOldResources(ns string, releaseName string, versionText string, wait bool) error {
-	selector := LabelReleaseName + "=" + releaseName + "," + LabelReleaseChartVersion + "!=" + versionText
+	selector := LabelReleaseName + "=" + releaseName + "," +
+		LabelReleaseChartVersion + "," +
+		LabelReleaseChartVersion + "!=" + versionText
 	err := h.deleteNamespacedResourcesBySelector(ns, selector, wait, "older releases")
 	if err != nil {
 		return err
@@ -856,18 +862,16 @@ func addLabelsToChartYaml(basedir string, hooksDir string, chart string, release
 				}
 				kind := getYamlValueString(&m, "kind")
 				helmHookType := getYamlValueString(&m, "metadata", "annotations", "helm.sh/hook")
+				err = processChartResource(partFile, data, kind, ns, releaseName, &m, metadata, version, chart, helmHookType != "")
+				if err != nil {
+					return errors.Wrap(err, fmt.Sprintf("when processing chart resource '%s'", partFile))
+				}
 				if helmHookType != "" {
 					helmHook, err := getHelmHookFromFile(basedir, path, hooksDir, helmHookType, kind, &m, partFile)
 					if err != nil {
 						return errors.Wrap(err, fmt.Sprintf("when getting helm hook from part file '%s'", partFile))
 					}
 					helmHooks = append(helmHooks, helmHook)
-				} else {
-					err := processChartResource(partFile, data, kind, ns, releaseName, &m, metadata, version, chart)
-					if err != nil {
-						return errors.Wrap(err, fmt.Sprintf("when processing chart resource '%s'", partFile))
-					}
-
 				}
 			}
 		}
@@ -908,7 +912,7 @@ func getHelmHookFromFile(basedir string, path string, hooksDir string, helmHook 
 	return NewHelmHook(kind, name, hookFile, helmHook, helmDeletePolicy), nil
 }
 
-func processChartResource(partFile string, data []byte, kind string, ns string, releaseName string, m *yaml.MapSlice, metadata *chart.Metadata, version string, chart string) error {
+func processChartResource(partFile string, data []byte, kind string, ns string, releaseName string, m *yaml.MapSlice, metadata *chart.Metadata, version string, chart string, hook bool) error {
 	err := setYamlValue(m, releaseName, "metadata", "labels", LabelReleaseName)
 	if err != nil {
 		return errors.Wrapf(err, "Failed to modify YAML of partFile %s", partFile)
@@ -919,7 +923,11 @@ func processChartResource(partFile string, data []byte, kind string, ns string, 
 			return errors.Wrapf(err, "Failed to modify YAML of partFile %s", partFile)
 		}
 	}
-	err = setYamlValue(m, version, "metadata", "labels", LabelReleaseChartVersion)
+	if hook {
+		err = setYamlValue(m, version, "metadata", "labels", LabelReleaseHookChartVersion)
+	} else {
+		err = setYamlValue(m, version, "metadata", "labels", LabelReleaseChartVersion)
+	}
 	if err != nil {
 		return errors.Wrapf(err, "Failed to modify YAML of partFile %s", partFile)
 	}
@@ -1110,6 +1118,9 @@ func (h *HelmTemplate) getChart(chartDir string, version string) (*chart.Metadat
 func (h *HelmTemplate) runHooks(hooks []*HelmHook, hookPhase string, ns string, chart string, releaseName string, wait bool, create bool, force bool) error {
 	matchingHooks := MatchingHooks(hooks, hookPhase, "")
 	for _, hook := range matchingHooks {
+		if util.StringArrayIndex(hook.HookDeletePolicies, beforeHookCreation) >= 0 {
+			h.kubectlDeleteFile(ns, hook.File)
+		}
 		err := h.kubectlApplyFile(ns, hookPhase, wait, create, force, hook.File)
 		if err != nil {
 			return err
@@ -1147,6 +1158,9 @@ func (h *HelmTemplate) deleteHooks(hooks []*HelmHook, hookPhase string, hookDele
 
 // NewHelmHook returns a newly created HelmHook
 func NewHelmHook(kind string, name string, file string, hook string, hookDeletePolicy string) *HelmHook {
+	if hookDeletePolicy == "" {
+		hookDeletePolicy = beforeHookCreation
+	}
 	return &HelmHook{
 		Kind:               kind,
 		Name:               name,
