@@ -282,3 +282,111 @@ func HandleExternalFileRefs(element interface{}, possibles map[string]string, js
 	// If it's not an object, we can't do much with it
 	return nil
 }
+
+func SplitValueArgs(valueArgs []string) (map[string][]string, error) {
+	globalArgs := []string{}
+	localArgs := map[string][]string{}
+	for _, arg := range valueArgs {
+		splits := strings.SplitN(arg, "=", 2)
+		if len(splits) <= 1 {
+			return nil, fmt.Errorf("unparsable --set arg \"%s\"", arg)
+		}
+		field := splits[0]
+		splits = strings.SplitN(field, ".", 2)
+		prefix := splits[0]
+		if prefix == "global" || prefix == "tags" {
+			globalArgs = append(globalArgs, arg)
+		} else if len(splits) > 1 {
+			arg = arg[len(prefix)+1:len(arg)]
+			localArgs[prefix] = append(localArgs[prefix], arg)
+		}
+	}
+	if len(globalArgs) == 0 {
+		return localArgs, nil
+	}
+	splitArgs := map[string][]string{
+		"global": globalArgs,
+	}
+	for key, args := range localArgs {
+		var copy []string
+		copy = append(copy, globalArgs...)
+		splitArgs[key] = append(copy, args...)
+	}
+	return splitArgs, nil
+}
+
+func SplitValueFiles(valueFiles []string) (map[string][]string, error) {
+	globalFiles := []string{}
+	localFiles := map[string][]string{}
+	dest, err := ioutil.TempDir("", "split-value-files-")
+	if err != nil {
+		return nil, err
+	}
+	err = os.Mkdir(filepath.Join(dest, "global"), 0700)
+	if err != nil {
+		return nil, err
+	}
+	for _, file := range valueFiles {
+		data, err := ioutil.ReadFile(file)
+		if err != nil {
+			return nil, err
+		}
+		value := map[string]interface{}{}
+		err = yaml.Unmarshal(data, &value)
+		if err != nil {
+			return nil, err
+		}
+		globalValues := map[string]interface{}{}
+		for key, subvalue := range value {
+			if subvalue == nil {
+				continue
+			}
+			if key == "global" || key == "tags" {
+				globalValues[key] = subvalue
+				continue
+			}
+			if localFiles[key] == nil {
+				err = os.Mkdir(filepath.Join(dest, key), 0700)
+				if err != nil {
+					return nil, err
+				}
+			}
+			data, err = yaml.Marshal(subvalue)
+			if err != nil {
+				return nil, err
+			}
+			target := fmt.Sprintf("values%d.yaml", len(localFiles[key]))
+			target = filepath.Join(dest, key, target)
+			err = ioutil.WriteFile(target, data, 0600)
+			if err != nil {
+				return nil, err
+			}
+			localFiles[key] = append(localFiles[key], target)
+		}
+		if len(globalValues) > 0 {
+			data, err = yaml.Marshal(globalValues)
+			if err != nil {
+				return nil, err
+			}
+			target := fmt.Sprintf("values%d.yaml", len(globalFiles))
+			target = filepath.Join(dest, "global", target)
+			err = ioutil.WriteFile(target, data, 0600)
+			if err != nil {
+				return nil, err
+			}
+			globalFiles = append(globalFiles, target)
+		}
+	}
+	if len(globalFiles) == 0 {
+		return localFiles, nil
+	}
+	splitFiles := map[string][]string{
+		"global": globalFiles,
+	}
+	for key, files := range localFiles {
+		var copy []string
+		copy = append(copy, globalFiles...)
+		splitFiles[key] = append(copy, files...)
+	}
+	return splitFiles, nil
+}

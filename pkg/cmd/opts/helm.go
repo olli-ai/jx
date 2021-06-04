@@ -664,6 +664,24 @@ func (o *CommonOptions) HelmInitDependencyBuild(dir string, chartRepos []string,
 	return nil
 }
 
+// HelmInitDependencyBuild initialises the dependencies and runs the build
+func (o *CommonOptions) HelmInitDependencyBuildNoLint(dir string, chartRepos []string) error {
+	err := o.HelmInitDependency(dir, chartRepos)
+	if err != nil {
+		return err
+	}
+	// TODO due to this issue: https://github.com/kubernetes/helm/issues/4230
+	// lets stick with helm2 for this step
+	//
+	o.Helm().SetCWD(dir)
+	err = o.Helm().BuildDependency()
+	if err != nil {
+		return errors.Wrapf(err, "failed to build the dependencies of chart '%s'", dir)
+	}
+
+	return nil
+}
+
 // HelmInitRecursiveDependencyBuild helm initialises the dependencies recursively
 func (o *CommonOptions) HelmInitRecursiveDependencyBuild(dir string, chartRepos []string, valuesFiles []string) error {
 	err := o.HelmInitDependency(dir, chartRepos)

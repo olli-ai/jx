@@ -660,6 +660,7 @@ type InstallChartOptions struct {
 	NoForce        bool
 	Wait           bool
 	UpgradeOnly    bool
+	MultiTemplates bool
 }
 
 // InstallFromChartOptions uses the helmer and kubeClient interfaces to install the chart from the options,
@@ -705,12 +706,24 @@ func InstallFromChartOptions(options InstallChartOptions, helmer Helmer, kubeCli
 	}
 	helmer.SetCWD(options.Dir)
 	if options.InstallOnly {
-		return helmer.InstallChart(chart, options.ReleaseName, options.Ns, options.Version, timeout,
-			options.SetValues, options.SetStrings, options.ValueFiles, options.Repository, options.Username, options.Password)
+		if options.MultiTemplates {
+			return helmer.InstallMultiChart(chart, options.ReleaseName, options.Ns, options.Version, timeout,
+				options.SetValues, options.SetStrings, options.ValueFiles, options.Repository, options.Username, options.Password)
+		} else {
+			return helmer.InstallChart(chart, options.ReleaseName, options.Ns, options.Version, timeout,
+				options.SetValues, options.SetStrings, options.ValueFiles, options.Repository, options.Username, options.Password)
+		}
+	} else {
+		if options.MultiTemplates {
+			return helmer.UpgradeMultiChart(chart, options.ReleaseName, options.Ns, options.Version, !options.UpgradeOnly, timeout,
+				!options.NoForce, options.Wait, options.SetValues, options.SetStrings, options.ValueFiles, options.Repository,
+				options.Username, options.Password)
+		} else {
+			return helmer.UpgradeChart(chart, options.ReleaseName, options.Ns, options.Version, !options.UpgradeOnly, timeout,
+				!options.NoForce, options.Wait, options.SetValues, options.SetStrings, options.ValueFiles, options.Repository,
+				options.Username, options.Password)
+		}
 	}
-	return helmer.UpgradeChart(chart, options.ReleaseName, options.Ns, options.Version, !options.UpgradeOnly, timeout,
-		!options.NoForce, options.Wait, options.SetValues, options.SetStrings, options.ValueFiles, options.Repository,
-		options.Username, options.Password)
 }
 
 // HelmRepoCredentials is a map of repositories to HelmRepoCredential that stores all the helm repo credentials for

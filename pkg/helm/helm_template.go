@@ -236,12 +236,19 @@ func (h *HelmTemplate) Template(chart string, releaseName string, ns string, out
 	return h.Client.Template(chart, releaseName, ns, outDir, upgrade, values, valueStrings, valueFiles)
 }
 
+// MultiTemplate generates the YAML from the chart template to the given directory
+func (h *HelmTemplate) MultiTemplate(chart string, releaseName string, ns string, outDir string, upgrade bool, values []string, valueStrings []string,
+	valueFiles []string) error {
+
+	return h.Client.MultiTemplate(chart, releaseName, ns, outDir, upgrade, values, valueStrings, valueFiles)
+}
+
 // Mutation API
 
-// InstallChart installs a helm chart according with the given flags
-func (h *HelmTemplate) InstallChart(chart string, releaseName string, ns string, version string, timeout int,
-	values []string, valueStrings []string, valueFiles []string, repo string, username string, password string) error {
-
+func (h *HelmTemplate) auxInstallChart(multi, create, force, wait bool,
+	chart string, releaseName string, ns string, version string, timeout int,
+	values []string, valueStrings []string, valueFiles []string,
+	repo string, username string, password string) error {
 	err := h.clearOutputDir(releaseName)
 	if err != nil {
 		return err
@@ -265,7 +272,11 @@ func (h *HelmTemplate) InstallChart(chart string, releaseName string, ns string,
 		}
 	}
 
-	err = h.Client.Template(chartDir, releaseName, ns, outputDir, false, values, valueStrings, valueFiles)
+	if multi {
+		err = h.Client.MultiTemplate(chartDir, releaseName, ns, outputDir, false, values, valueStrings, valueFiles)
+	} else {
+		err = h.Client.Template(chartDir, releaseName, ns, outputDir, false, values, valueStrings, valueFiles)
+	}
 	if err != nil {
 		return err
 	}
@@ -287,9 +298,20 @@ func (h *HelmTemplate) InstallChart(chart string, releaseName string, ns string,
 	helmCrdPhase := "crd-install"
 	helmPrePhase := "pre-install"
 	helmPostPhase := "post-install"
-	wait := true
-	create := true
-	force := true
+	if !create {
+		helmPrePhase = "pre-upgrade"
+		helmPostPhase = "post-upgrade"
+
+		// Hack helm hooks
+		if len(MatchingHooks(helmHooks, "post-install", "")) > 0 &&
+				len(MatchingHooks(helmHooks, helmPostPhase, "")) == 0 {
+			helmPostPhase = "post-install"
+			if len(MatchingHooks(helmHooks, "pre-install", "")) > 0 &&
+					len(MatchingHooks(helmHooks, helmPrePhase, "")) == 0 {
+				helmPrePhase = "pre-install"
+			}
+		}
+	}
 
 	err = h.runHooks(helmHooks, helmCrdPhase, ns, chart, releaseName, wait, create, force)
 	if err != nil {
@@ -321,6 +343,32 @@ func (h *HelmTemplate) InstallChart(chart string, releaseName string, ns string,
 	err2 := h.deleteOldResources(ns, releaseName, versionText, wait)
 
 	return errorutil.CombineErrors(err, err2)
+}
+
+// InstallChart installs a helm chart according with the given flags
+func (h *HelmTemplate) InstallChart(chart string, releaseName string, ns string, version string, timeout int,
+	values []string, valueStrings []string, valueFiles []string, repo string, username string, password string) error {
+	return h.auxInstallChart(false, true, true, true, chart, releaseName, ns,
+		version, timeout, values, valueStrings, valueFiles, repo, username, password)
+}
+
+// UpgradeChart upgrades a helm chart according with given helm flags
+func (h *HelmTemplate) UpgradeChart(chart string, releaseName string, ns string, version string, install bool, timeout int, force bool, wait bool, values []string, valueStrings []string, valueFiles []string, repo string, username string, password string) error {
+	return h.auxInstallChart(false, false, force, wait, chart, releaseName, ns,
+		version, timeout, values, valueStrings, valueFiles, repo, username, password)
+}
+
+// MultiInstallChart installs a helm chart according with the given flags
+func (h *HelmTemplate) InstallMultiChart(chart string, releaseName string, ns string, version string, timeout int,
+	values []string, valueStrings []string, valueFiles []string, repo string, username string, password string) error {
+	return h.auxInstallChart(true, true, true, true, chart, releaseName, ns,
+		version, timeout, values, valueStrings, valueFiles, repo, username, password)
+}
+
+// MultiUpgradeChart upgrades a helm chart according with given helm flags
+func (h *HelmTemplate) UpgradeMultiChart(chart string, releaseName string, ns string, version string, install bool, timeout int, force bool, wait bool, values []string, valueStrings []string, valueFiles []string, repo string, username string, password string) error {
+	return h.auxInstallChart(true, false, force, wait, chart, releaseName, ns,
+		version, timeout, values, valueStrings, valueFiles, repo, username, password)
 }
 
 // FetchChart fetches a Helm Chart
@@ -328,96 +376,6 @@ func (h *HelmTemplate) FetchChart(chart string, version string, untar bool, unta
 	username string, password string) error {
 	_, err := h.fetchChart(chart, version, untardir, repo, username, password)
 	return err
-}
-
-// UpgradeChart upgrades a helm chart according with given helm flags
-func (h *HelmTemplate) UpgradeChart(chart string, releaseName string, ns string, version string, install bool, timeout int, force bool, wait bool, values []string, valueStrings []string, valueFiles []string, repo string, username string, password string) error {
-	err := h.clearOutputDir(releaseName)
-	if err != nil {
-		return err
-	}
-	outputDir, _, chartsDir, err := h.getDirectories(releaseName)
-	if err != nil {
-		return err
-	}
-
-	// check if we are installing a chart from the filesystem
-	chartDir := filepath.Join(h.CWD, chart)
-	exists, err := util.DirExists(chartDir)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		log.Logger().Debugf("Fetching chart: %s", chart)
-		chartDir, err = h.fetchChart(chart, version, chartsDir, repo, username, password)
-		if err != nil {
-			return err
-		}
-	}
-	err = h.Client.Template(chartDir, releaseName, ns, outputDir, false, values, valueStrings, valueFiles)
-	if err != nil {
-		return err
-	}
-
-	// Skip the chart when no resources are generated by the template
-	if empty, err := util.IsEmpty(outputDir); empty || err != nil {
-		return nil
-	}
-
-	metadata, versionText, err := h.getChart(chartDir, version)
-	if err != nil {
-		return err
-	}
-
-	helmHooks, err := h.addLabelsToFiles(chart, releaseName, versionText, metadata, ns)
-	if err != nil {
-		return err
-	}
-
-	helmCrdPhase := "crd-install"
-	helmPrePhase := "pre-upgrade"
-	helmPostPhase := "post-upgrade"
-
-	// Hack helm hooks
-	if len(MatchingHooks(helmHooks, "post-install", "")) > 0 && len(MatchingHooks(helmHooks, helmPostPhase, "")) == 0 {
-		helmPostPhase = "post-install"
-		if len(MatchingHooks(helmHooks, "pre-install", "")) > 0 && len(MatchingHooks(helmHooks, helmPrePhase, "")) == 0 {
-			helmPrePhase = "pre-install"
-		}
-	}
-
-	create := false
-
-	err = h.runHooks(helmHooks, helmCrdPhase, ns, chart, releaseName, wait, create, force)
-	if err != nil {
-		return err
-	}
-
-	err = h.runHooks(helmHooks, helmPrePhase, ns, chart, releaseName, wait, create, force)
-	if err != nil {
-		return err
-	}
-
-	err = h.kubectlApply(ns, releaseName, wait, create, force, outputDir)
-	if err != nil {
-		err2 := h.deleteHooks(helmHooks, helmPrePhase, hookFailed, ns)
-		return errorutil.CombineErrors(err, err2)
-	}
-	err = h.deleteHooks(helmHooks, helmPrePhase, hookSucceeded, ns)
-	if err != nil {
-		log.Logger().Warnf("Failed to delete the %s hook, due to: %s", helmPrePhase, err)
-	}
-
-	err = h.runHooks(helmHooks, helmPostPhase, ns, chart, releaseName, wait, create, force)
-	if err != nil {
-		err2 := h.deleteHooks(helmHooks, helmPostPhase, hookFailed, ns)
-		return errorutil.CombineErrors(err, err2)
-	}
-
-	err = h.deleteHooks(helmHooks, helmPostPhase, hookSucceeded, ns)
-	err2 := h.deleteOldResources(ns, releaseName, versionText, wait)
-
-	return errorutil.CombineErrors(err, err2)
 }
 
 func (h *HelmTemplate) DecryptSecrets(location string) error {

@@ -2,6 +2,7 @@ package helm
 
 import (
 	"fmt"
+	"io/ioutil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -313,18 +314,31 @@ func (h *HelmCLI) BuildDependency() error {
 	return h.runHelm("dependency", "build")
 }
 
-// InstallChart installs a helm chart according with the given flags
-func (h *HelmCLI) InstallChart(chart string, releaseName string, ns string, version string, timeout int,
-	values []string, valueStrings []string, valueFiles []string, repo string, username string, password string) error {
+func (h *HelmCLI) auxInstallChart(create, install, force, wait bool,
+	chart string, releaseName string, ns string, version string, timeout int,
+	values []string, valueStrings []string, valueFiles []string,
+	repo string, username string, password string) error {
 	var err error
-
 	args := []string{}
-	args = append(args, "install", "--wait", "--name", releaseName, "--namespace", ns, chart)
+	if create {
+		args = append(args, "install", "--name", releaseName, "--namespace", ns, chart)
+	} else {
+		args = append(args, "upgrade", "--namespace", ns)
+	}
 	repo, err = addUsernamePasswordToURL(repo, username, password)
 	if err != nil {
 		return err
 	}
 
+	if !create && install {
+		args = append(args, "--install")
+	}
+	if wait {
+		args = append(args, "--wait")
+	}
+	if force {
+		args = append(args, "--force")
+	}
 	if timeout != -1 {
 		if h.BinVersion == V3 {
 			args = append(args, "--timeout", fmt.Sprintf("%ss", strconv.Itoa(timeout)))
@@ -357,6 +371,10 @@ func (h *HelmCLI) InstallChart(chart string, releaseName string, ns string, vers
 	if logLevel != "" {
 		args = append(args, "-v", logLevel)
 	}
+	if !create {
+		args = append(args, releaseName, chart)
+	}
+
 	if h.Debug {
 		log.Logger().Infof("Installing Chart '%s'", util.ColorInfo(strings.Join(args, " ")))
 	}
@@ -367,6 +385,32 @@ func (h *HelmCLI) InstallChart(chart string, releaseName string, ns string, vers
 	}
 
 	return nil
+}
+
+// InstallChart installs a helm chart according with the given flags
+func (h *HelmCLI) InstallChart(chart string, releaseName string, ns string, version string, timeout int,
+	values []string, valueStrings []string, valueFiles []string, repo string, username string, password string) error {
+	return h.auxInstallChart(true, false, false, true, chart, releaseName, ns,
+		version, timeout, values, valueStrings, valueFiles, repo, username, password)
+}
+
+// UpgradeChart upgrades a helm chart according with given helm flags
+func (h *HelmCLI) UpgradeChart(chart string, releaseName string, ns string, version string, install bool, timeout int, force bool, wait bool, values []string, valueStrings []string, valueFiles []string, repo string, username string, password string) error {
+	return h.auxInstallChart(false, install, force, wait, chart, releaseName, ns,
+		version, timeout, values, valueStrings, valueFiles, repo, username, password)
+}
+
+// InstallMultiChart installs a helm chart according with the given flags
+func (h *HelmCLI) InstallMultiChart(chart string, releaseName string, ns string, version string, timeout int,
+	values []string, valueStrings []string, valueFiles []string, repo string, username string, password string) error {
+	return h.auxInstallChart(true, false, false, true, chart, releaseName, ns,
+		version, timeout, values, valueStrings, valueFiles, repo, username, password)
+}
+
+// UpgradeMultiChart upgrades a helm chart according with given helm flags
+func (h *HelmCLI) UpgradeMultiChart(chart string, releaseName string, ns string, version string, install bool, timeout int, force bool, wait bool, values []string, valueStrings []string, valueFiles []string, repo string, username string, password string) error {
+	return h.auxInstallChart(false, install, force, wait, chart, releaseName, ns,
+		version, timeout, values, valueStrings, valueFiles, repo, username, password)
 }
 
 // FetchChart fetches a Helm Chart
@@ -438,72 +482,108 @@ func (h *HelmCLI) Template(chart string, releaseName string, ns string, outDir s
 	if err != nil {
 		return errors.Wrapf(err, "Failed to run helm %s", strings.Join(args, " "))
 	}
-	return err
+	return nil
 }
 
-// UpgradeChart upgrades a helm chart according with given helm flags
-func (h *HelmCLI) UpgradeChart(chart string, releaseName string, ns string, version string, install bool, timeout int, force bool, wait bool, values []string, valueStrings []string, valueFiles []string, repo string, username string, password string) error {
-	var err error
-	args := []string{}
-	args = append(args, "upgrade")
-	args = append(args, "--namespace", ns)
-	repo, err = addUsernamePasswordToURL(repo, username, password)
+// Template generates the YAML from the chart template to the given directory
+func (h *HelmCLI) MultiTemplate(chart string, releaseName string, ns string, outDir string, upgrade bool,
+	values []string, valueStrings []string, valueFiles []string) error {
+	cwd := h.CWD
+	requirements, err := LoadRequirementsFile(filepath.Join(chart, RequirementsFileName))
 	if err != nil {
-		return err
+		return errors.Wrapf(err, "failed to load requirements.yaml")
 	}
-
-	if install {
-		args = append(args, "--install")
+	splitValues, err := SplitValueArgs(values)
+	if err != nil {
+		return errors.Wrapf(err, "failed to split values")
 	}
-	if wait {
-		args = append(args, "--wait")
+	splitValueStrings, err := SplitValueArgs(valueStrings)
+	if err != nil {
+		return errors.Wrapf(err, "failed to split value strings")
 	}
-	if force {
-		args = append(args, "--force")
+	splitValueFiles, err := SplitValueFiles(valueFiles)
+	if err != nil {
+		return errors.Wrapf(err, "failed to split value files")
 	}
-	if timeout != -1 {
-		if h.BinVersion == V3 {
-			args = append(args, "--timeout", fmt.Sprintf("%ss", strconv.Itoa(timeout)))
-		} else {
-			args = append(args, "--timeout", strconv.Itoa(timeout))
+	getValues := func(values map[string][]string, alias string) []string {
+		local, ok := values[alias]
+		if !ok {
+			local = values["global"]
+		}
+		return local
+	}
+	for _, dependency := range requirements.Dependencies {
+		alias := dependency.Alias
+		if alias == "" {
+			alias = dependency.Name
+		}
+		localValues := getValues(splitValues, alias)
+		localValuesStrings := getValues(splitValueStrings, alias)
+		localValuesFiles := getValues(splitValueFiles, alias)
+		h.CWD = filepath.Join(cwd, "charts", dependency.Name)
+		subChart := filepath.Join(chart, "charts", dependency.Name)
+		// subDir := filepath.Join(outDir, alias)
+		// err := os.Mkdir(subDir, 0700)
+		// if err != nil {
+		// 	return err
+		// }
+		_, err = h.Lint(localValuesFiles)
+		if err != nil {
+			return errors.Wrapf(err, "failed to lint subchart %s", alias)
+		}
+		err = h.Template(subChart, releaseName, ns, outDir, upgrade,
+			localValues, localValuesStrings, localValuesFiles)
+		if err != nil {
+			return err
 		}
 	}
-	if version != "" {
-		args = append(args, "--version", version)
+	h.CWD = cwd
+	var rmSubTemplates func(string) error
+	rmSubTemplates = func(chart string) error {
+		stat, err := os.Stat(filepath.Join(chart, "charts"))
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		} else if err != nil || !stat.IsDir() {
+			return nil
+		}
+		subcharts, err := ioutil.ReadDir(filepath.Join(chart, "charts"))
+		if err != nil {
+			return err
+		}
+		for _, entry := range subcharts {
+			if !entry.IsDir() {
+				continue
+			}
+			subchart := filepath.Join(chart, "charts", entry.Name())
+			stat, err := os.Stat(filepath.Join(subchart, "templates"))
+			if err != nil && !os.IsNotExist(err) {
+				return err
+			} else if err == nil && stat.IsDir() {
+				err = os.RemoveAll(filepath.Join(subchart, "templates"))
+				if err != nil {
+					return err
+				}
+			}
+			err = rmSubTemplates(subchart)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	}
-	for _, value := range values {
-		args = append(args, "--set", value)
-	}
-	for _, value := range valueStrings {
-		args = append(args, "--set-string", value)
-	}
-	for _, valueFile := range valueFiles {
-		args = append(args, "--values", valueFile)
-	}
-	if repo != "" {
-		args = append(args, "--repo", repo)
-	}
-	if username != "" {
-		args = append(args, "--username", username)
-	}
-	if password != "" {
-		args = append(args, "--password", password)
-	}
-	logLevel := os.Getenv("JX_HELM_VERBOSE")
-	if logLevel != "" {
-		args = append(args, "-v", logLevel)
-	}
-	args = append(args, releaseName, chart)
-
-	if h.Debug {
-		log.Logger().Infof("Upgrading Chart '%s'", util.ColorInfo(strings.Join(args, " ")))
-	}
-
-	err = h.runHelm(args...)
+	err = rmSubTemplates(chart)
 	if err != nil {
 		return err
 	}
-
+	_, err = h.Lint(valueFiles)
+	if err != nil {
+		return errors.Wrapf(err, "failed to lint chart")
+	}
+	err = h.Template(chart, releaseName, ns, outDir, upgrade,
+		values, valueStrings, valueFiles)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 

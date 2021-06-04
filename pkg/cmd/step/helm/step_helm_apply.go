@@ -312,8 +312,7 @@ func (o *StepHelmApplyOptions) Run() error {
 			return errors.Wrapf(err, "failed to replace missing versions in the requirements.yaml in dir %s", dir)
 		}
 	}
-
-	err = o.HelmInitDependencyBuild(dir, o.DefaultReleaseCharts(), valueFiles)
+	err = o.HelmInitDependencyBuildNoLint(dir, o.DefaultReleaseCharts())
 	if err != nil {
 		return err
 	}
@@ -324,19 +323,24 @@ func (o *StepHelmApplyOptions) Run() error {
 		return errors.Wrapf(err, "finding chart dependencies in %s", filepath.Join(dir, "charts"))
 	}
 	for _, src := range dependencies {
-		dest, err := ioutil.TempDir("", "")
+		tmp, err := ioutil.TempDir("", "jx-dependencies")
 		if err != nil {
 			return errors.Wrapf(err, "creating temp dir")
 		}
-		err = archiver.Unarchive(src, dest)
+		err = archiver.Unarchive(src, tmp)
 		if err != nil {
-			return errors.Wrapf(err, "untarring %s to %s", src, dest)
+			return errors.Wrapf(err, "untarring %s to %s", src, tmp)
 		}
-		err = os.Remove(src)
+		dirs, err := ioutil.ReadDir(tmp)
 		if err != nil {
-			return errors.Wrapf(err, "removing %s", src)
+			return errors.Wrapf(err, "listing %s", tmp)
 		}
-		err = filepath.Walk(dest, func(path string, info os.FileInfo, err error) error {
+		if !(len(dirs) == 1 && dirs[0].IsDir() && strings.HasPrefix(filepath.Base(src), dirs[0].Name() + "-")) {
+			return errors.Wrapf(err, "unexpected chart format %s", src)
+		}
+		tmp = filepath.Join(tmp, dirs[0].Name())
+		dest := filepath.Join(dir, "charts", dirs[0].Name())
+		err = filepath.Walk(tmp, func(path string, info os.FileInfo, err error) error {
 			if filepath.Base(path) == helm.ValuesFileName {
 
 				newFiles, cleanup, err := helm.DecorateWithSecrets([]string{path}, secretURLClient)
@@ -344,7 +348,7 @@ func (o *StepHelmApplyOptions) Run() error {
 				if err != nil {
 					return errors.Wrapf(err, "decorating %s with secrets", path)
 				}
-				err = util.CopyFile(newFiles[0], path)
+				err = os.Rename(newFiles[0], path)
 				if err != nil {
 					return errors.Wrapf(err, "moving decorated file %s to %s", newFiles[0], path)
 				}
@@ -352,13 +356,21 @@ func (o *StepHelmApplyOptions) Run() error {
 			return nil
 		})
 		if err != nil {
-			return err
+			return errors.Wrapf(err, "walking %s", tmp)
 		}
-		dirs, err := filepath.Glob(filepath.Join(dest, "*"))
+		err = os.Rename(tmp, dest)
 		if err != nil {
-			return errors.Wrapf(err, "list %s", filepath.Join(dest, "*"))
+			return errors.Wrapf(err, "moving %s to %s", tmp, dest)
 		}
-		err = archiver.Archive(dirs, src)
+		err = os.Remove(filepath.Dir(tmp))
+		if err != nil {
+			return errors.Wrapf(err, "removing %s", filepath.Dir(tmp))
+		}
+		err = os.Remove(src)
+		if err != nil {
+			return errors.Wrapf(err, "removing %s", src)
+		}
+		// err = archiver.Archive(dirs, src)
 	}
 
 	err = o.applyAppsTemplateOverrides(chartName)
@@ -373,14 +385,15 @@ func (o *StepHelmApplyOptions) Run() error {
 	setValues, setStrings := o.getChartValues(ns)
 
 	helmOptions := helm.InstallChartOptions{
-		Chart:       chartName,
-		ReleaseName: releaseName,
-		Ns:          ns,
-		NoForce:     !o.Force,
-		SetValues:   setValues,
-		SetStrings:  setStrings,
-		ValueFiles:  valueFiles,
-		Dir:         dir,
+		Chart:          chartName,
+		ReleaseName:    releaseName,
+		Ns:             ns,
+		NoForce:        !o.Force,
+		SetValues:      setValues,
+		SetStrings:     setStrings,
+		ValueFiles:     valueFiles,
+		Dir:            dir,
+		MultiTemplates: true,
 	}
 	if o.Boot {
 		helmOptions.VersionsGitURL = requirements.VersionStream.URL
