@@ -1038,11 +1038,13 @@ func setYamlValue(mapSlice *yaml.MapSlice, value string, keys ...string) error {
 }
 
 func (h *HelmTemplate) runKubectl(args ...string) error {
-	h.Runner.SetDir(h.CWD)
-	h.Runner.SetName(h.Binary)
-	h.Runner.SetArgs(args)
-	output, err := h.Runner.RunWithoutRetry()
-	log.Logger().Debugf(output)
+	// h.Runner.SetDir(h.CWD)
+	// h.Runner.SetName(h.Binary)
+	// h.Runner.SetArgs(args)
+	// output, err := h.Runner.RunWithoutRetry()
+	// log.Logger().Debugf(output)
+	// return err
+	_, err := h.runKubectlWithOutput(args...)
 	return err
 }
 
@@ -1050,7 +1052,19 @@ func (h *HelmTemplate) runKubectlWithOutput(args ...string) (string, error) {
 	h.Runner.SetDir(h.CWD)
 	h.Runner.SetName(h.Binary)
 	h.Runner.SetArgs(args)
-	return h.Runner.RunWithoutRetry()
+	// return h.Runner.RunWithoutRetry()
+	fmt.Printf("runKubectl: %s\n", strings.Join(args, " "))
+	if args[0] == "create" || args[0] == "apply" {
+		args = append([]string{args[0], "--dry-run"}, args[1:len(args)]...)
+	} else if args[0] == "delete" {
+		args = append([]string{"get"}, args[1:len(args)]...)
+	} else {
+		return "", fmt.Errorf("unknown command 'kubectl %s'", args[0])
+	}
+	output, err := h.Runner.RunWithoutRetry()
+	fmt.Printf("runKubectl: \n    %s\n", strings.Join(strings.Split(output, "\n"), "    \n"))
+	log.Logger().Debugf(output)
+	return output, err
 }
 
 // getChart returns the chart metadata for the given dir

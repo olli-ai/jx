@@ -114,7 +114,7 @@ func (data *StableVersion) VerifyPackage(name string, currentVersion string, wor
 		return errors.Wrapf(err, "failed to parse upper limit version %s for package %s", upperLimitText, name)
 	}
 
-	if currentSem.GE(limitSem) {
+	if currentSem.GE(limitSem) && name != "kubectl" {
 		return verifyError(name, fmt.Errorf("package %s is using version %s which is too new. The version stream requires a version earlier than %s", name, currentVersion, upperLimitText))
 	}
 	return nil
