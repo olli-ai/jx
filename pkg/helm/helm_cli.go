@@ -501,7 +501,14 @@ func (h *HelmCLI) MultiTemplate(chart string, releaseName string, ns string, out
 	if err != nil {
 		return errors.Wrapf(err, "failed to split value strings")
 	}
-	splitValueFiles, err := SplitValueFiles(valueFiles)
+	completeValueFiles := valueFiles
+	mainValueFile := filepath.Join(h.CWD, ValuesFileName)
+	if _, err := os.Stat(mainValueFile); err == nil {
+		completeValueFiles = append([]string{mainValueFile}, ...valueFiles)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	splitValueFiles, err := SplitValueFiles(completeValueFiles)
 	if err != nil {
 		return errors.Wrapf(err, "failed to split value files")
 	}
