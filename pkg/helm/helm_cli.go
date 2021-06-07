@@ -504,7 +504,7 @@ func (h *HelmCLI) MultiTemplate(chart string, releaseName string, ns string, out
 	completeValueFiles := valueFiles
 	mainValueFile := filepath.Join(h.CWD, ValuesFileName)
 	if _, err := os.Stat(mainValueFile); err == nil {
-		completeValueFiles = append([]string{mainValueFile}, ...valueFiles)
+		completeValueFiles = append([]string{mainValueFile}, valueFiles...)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
