@@ -28,6 +28,8 @@ import (
 	"github.com/jenkins-x/jx/v2/pkg/secreturl/fakevault"
 	"github.com/jenkins-x/jx/v2/pkg/util"
 	"github.com/jenkins-x/jx/v2/pkg/vault"
+
+	"k8s.io/helm/pkg/chartutil"
 )
 
 // StepHelmApplyOptions contains the command line flags
@@ -340,6 +342,17 @@ func (o *StepHelmApplyOptions) Run() error {
 		}
 		tmp = filepath.Join(tmp, dirs[0].Name())
 		dest := filepath.Join(dir, "charts", dirs[0].Name())
+		chart, err := chartutil.LoadChartfile(filepath.Join(tmp, "Chart.yaml"))
+		if err != nil {
+			return errors.Wrapf(err, "loading %s/Chart.yaml", tmp)
+		}
+		if chart.ApiVersion == "" {
+			chart.ApiVersion = "v1"
+			err = chartutil.SaveChartfile(filepath.Join(tmp, "Chart.yaml"), chart)
+			if err != nil {
+				return errors.Wrapf(err, "saving %s/Chart.yaml", tmp)
+			}
+		}
 		err = filepath.Walk(tmp, func(path string, info os.FileInfo, err error) error {
 			if filepath.Base(path) == helm.ValuesFileName {
 
