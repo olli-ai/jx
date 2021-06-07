@@ -88,6 +88,7 @@ func CreateOrUpdateSourceResource(tektonClient tektonclient.Interface, ns string
 	if err == nil {
 		return created, nil
 	}
+	fmt.Printf("error while creating pipeline: %s\n%v\n", err, created)
 
 	answer, err2 := resourceInterface.Get(resourceName, metav1.GetOptions{})
 	if err2 != nil {

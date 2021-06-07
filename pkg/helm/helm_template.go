@@ -1084,6 +1084,8 @@ func (h *HelmTemplate) runKubectl(args ...string) error {
 	h.Runner.SetName(h.Binary)
 	h.Runner.SetArgs(args)
 	output, err := h.Runner.RunWithoutRetry()
+	fmt.Printf("runKubectl: %s\n", strings.Join(args, " "))
+	fmt.Printf("runKubectl: \n    %s\n", strings.Join(strings.Split(output, "\n"), "    \n"))
 	log.Logger().Debugf(output)
 	return err
 }
@@ -1092,7 +1094,11 @@ func (h *HelmTemplate) runKubectlWithOutput(args ...string) (string, error) {
 	h.Runner.SetDir(h.CWD)
 	h.Runner.SetName(h.Binary)
 	h.Runner.SetArgs(args)
-	return h.Runner.RunWithoutRetry()
+	output, err := h.Runner.RunWithoutRetry()
+	fmt.Printf("runKubectl: %s\n", strings.Join(args, " "))
+	fmt.Printf("runKubectl: \n    %s\n", strings.Join(strings.Split(output, "\n"), "    \n"))
+	return output, err
+	// return h.Runner.RunWithoutRetry()
 }
 
 // getChart returns the chart metadata for the given dir
