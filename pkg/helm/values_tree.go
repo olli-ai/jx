@@ -283,9 +283,11 @@ func HandleExternalFileRefs(element interface{}, possibles map[string]string, js
 	return nil
 }
 
+// SplitValueArgs splits helm --set and --set-string arguments for each subchart
 func SplitValueArgs(valueArgs []string) (map[string][]string, error) {
 	globalArgs := []string{}
 	localArgs := map[string][]string{}
+	// split arguments by prefix, special treatment for global and tags
 	for _, arg := range valueArgs {
 		splits := strings.SplitN(arg, "=", 2)
 		if len(splits) <= 1 {
@@ -315,6 +317,7 @@ func SplitValueArgs(valueArgs []string) (map[string][]string, error) {
 	return splitArgs, nil
 }
 
+// SplitValueArgs splitshelm helm value files in sub value files for each subchart
 func SplitValueFiles(valueFiles []string) (map[string][]string, error) {
 	globalFiles := []string{}
 	localFiles := map[string][]string{}
@@ -327,6 +330,7 @@ func SplitValueFiles(valueFiles []string) (map[string][]string, error) {
 		return nil, err
 	}
 	for _, file := range valueFiles {
+		// ready the yaml value file
 		data, err := ioutil.ReadFile(file)
 		if err != nil {
 			return nil, err
@@ -336,6 +340,7 @@ func SplitValueFiles(valueFiles []string) (map[string][]string, error) {
 		if err != nil {
 			return nil, err
 		}
+		// split it by key, special treatment for global and tags
 		globalValues := map[string]interface{}{}
 		for key, subvalue := range value {
 			if subvalue == nil {
@@ -363,6 +368,7 @@ func SplitValueFiles(valueFiles []string) (map[string][]string, error) {
 			}
 			localFiles[key] = append(localFiles[key], target)
 		}
+		// create subfiles for each subchart
 		if len(globalValues) > 0 {
 			data, err = yaml.Marshal(globalValues)
 			if err != nil {
@@ -389,4 +395,45 @@ func SplitValueFiles(valueFiles []string) (map[string][]string, error) {
 		splitFiles[key] = append(copy, files...)
 	}
 	return splitFiles, nil
+}
+
+func GetSplitted(splits map[string][]string, alias string) []string {
+	values, ok := splits[alias]
+	if ok {
+		return values
+	}
+	return splits["global"]
+}
+
+func RemoveSubTemplates(dir string) error {
+	stat, err := os.Stat(filepath.Join(dir, "charts"))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	} else if err != nil || !stat.IsDir() {
+		return nil
+	}
+	subcharts, err := ioutil.ReadDir(filepath.Join(dir, "charts"))
+	if err != nil {
+		return err
+	}
+	for _, entry := range subcharts {
+		if !entry.IsDir() {
+			continue
+		}
+		subchart := filepath.Join(dir, "charts", entry.Name())
+		stat, err := os.Stat(filepath.Join(subchart, "templates"))
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		} else if err == nil && stat.IsDir() {
+			err = os.RemoveAll(filepath.Join(subchart, "templates"))
+			if err != nil {
+				return err
+			}
+		}
+		err = RemoveSubTemplates(subchart)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }

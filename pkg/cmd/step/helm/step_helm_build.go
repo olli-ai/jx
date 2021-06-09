@@ -22,9 +22,10 @@ import (
 type StepHelmBuildOptions struct {
 	StepHelmOptions
 
-	recursive         bool
+	Recursive         bool
 	Boot              bool
 	ProviderValuesDir string
+	MultiTemplates    bool
 }
 
 var (
@@ -65,9 +66,10 @@ func NewCmdStepHelmBuild(commonOpts *opts.CommonOptions) *cobra.Command {
 
 	options.addStepHelmFlags(cmd)
 
-	cmd.Flags().BoolVarP(&options.recursive, "recursive", "r", false, "Build recursively the dependent charts")
+	cmd.Flags().BoolVarP(&options.Recursive, "recursive", "r", false, "Build recursively the dependent charts")
 	cmd.Flags().BoolVarP(&options.Boot, "boot", "", false, "In Boot mode we load the Version Stream from the 'jx-requirements.yml' and use that to replace any missing versions in the 'reuqirements.yaml' file from the Version Stream")
 	cmd.Flags().StringVarP(&options.ProviderValuesDir, "provider-values-dir", "", "", "The optional directory of kubernetes provider specific override values.tmpl.yaml files a kubernetes provider specific folder")
+	cmd.Flags().BoolVarP(&options.MultiTemplates, "multi-templates", "", false, "Calls helm template on each sub chart instead of globally, to avoid conflict among charts with different versions")
 	return cmd
 }
 
@@ -141,9 +143,60 @@ func (o *StepHelmBuildOptions) Run() error {
 		}
 	}
 
-	if o.recursive {
-		return o.HelmInitRecursiveDependencyBuild(dir, o.DefaultReleaseCharts(), valuesFiles)
+	if !o.MultiTemplates {
+		if o.Recursive {
+			return o.HelmInitRecursiveDependencyBuild(dir, o.DefaultReleaseCharts(), valuesFiles)
+		} else {
+			return o.HelmInitDependencyBuild(dir, o.DefaultReleaseCharts(), valuesFiles)
+		}
 	}
-	err = o.HelmInitDependencyBuild(dir, o.DefaultReleaseCharts(), valuesFiles)
-	return err
+
+	if o.Recursive {
+		err = o.HelmInitRecursiveDependencyBuildNoLint(dir, o.DefaultReleaseCharts())
+	} else {
+		err = o.HelmInitDependencyBuildNoLint(dir, o.DefaultReleaseCharts())
+	}
+	if err != nil {
+		return err
+	}
+
+	// Unpack all dependencies and lint them seperately
+	err = o.UnpackCharts(dir)
+	if err != nil {
+		return err
+	}
+
+	completeValueFiles := valuesFiles
+	mainValueFile := filepath.Join(dir, helm.ValuesFileName)
+	if _, err := os.Stat(mainValueFile); err == nil {
+		completeValueFiles = append([]string{mainValueFile}, valuesFiles...)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return errors.Wrapf(err, "stat %s", mainValueFile)
+	}
+	splitValueFiles, err := helm.SplitValueFiles(completeValueFiles)
+	if err != nil {
+		return errors.Wrapf(err, "failed to split value files")
+	}
+
+	requirements, err := helm.LoadRequirementsFile(filepath.Join(dir, helm.RequirementsFileName))
+	if err != nil {
+		return err
+	}
+	for _, dependency := range requirements.Dependencies {
+		alias := dependency.Alias
+		if alias == "" {
+			alias = dependency.Name
+		}
+		localValuesFiles := helm.GetSplitted(splitValueFiles, alias)
+		err = o.HelmLint(filepath.Join(dir, "charts", dependency.Name), localValuesFiles)
+		if err != nil {
+			return err
+		}
+	}
+
+	err = helm.RemoveSubTemplates(dir)
+	if err != nil {
+		return err
+	}
+	return o.HelmLint(dir, valuesFiles)
 }

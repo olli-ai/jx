@@ -2,7 +2,6 @@ package helm
 
 import (
 	"fmt"
-	"io/ioutil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -485,14 +484,20 @@ func (h *HelmCLI) Template(chart string, releaseName string, ns string, outDir s
 	return nil
 }
 
-// Template generates the YAML from the chart template to the given directory
+// MultiTemplate generates the YAML from the chart template to the given directory
+// using several calls to helm template, to avoid conflicts between
+// different versions of a same cahrt
 func (h *HelmCLI) MultiTemplate(chart string, releaseName string, ns string, outDir string, upgrade bool,
 	values []string, valueStrings []string, valueFiles []string) error {
 	cwd := h.CWD
+	defer func(){
+		h.CWD = cwd
+	}()
 	requirements, err := LoadRequirementsFile(filepath.Join(chart, RequirementsFileName))
 	if err != nil {
 		return errors.Wrapf(err, "failed to load requirements.yaml")
 	}
+	// split helm arguments for each subchart
 	splitValues, err := SplitValueArgs(values)
 	if err != nil {
 		return errors.Wrapf(err, "failed to split values")
@@ -506,27 +511,21 @@ func (h *HelmCLI) MultiTemplate(chart string, releaseName string, ns string, out
 	if _, err := os.Stat(mainValueFile); err == nil {
 		completeValueFiles = append([]string{mainValueFile}, valueFiles...)
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+		return errors.Wrapf(err, "stat %s", mainValueFile)
 	}
 	splitValueFiles, err := SplitValueFiles(completeValueFiles)
 	if err != nil {
 		return errors.Wrapf(err, "failed to split value files")
 	}
-	getValues := func(values map[string][]string, alias string) []string {
-		local, ok := values[alias]
-		if !ok {
-			local = values["global"]
-		}
-		return local
-	}
+	// lint and create templates for each subchart
 	for _, dependency := range requirements.Dependencies {
 		alias := dependency.Alias
 		if alias == "" {
 			alias = dependency.Name
 		}
-		localValues := getValues(splitValues, alias)
-		localValuesStrings := getValues(splitValueStrings, alias)
-		localValuesFiles := getValues(splitValueFiles, alias)
+		localValues := GetSplitted(splitValues, alias)
+		localValuesStrings := GetSplitted(splitValueStrings, alias)
+		localValuesFiles := GetSplitted(splitValueFiles, alias)
 		h.CWD = filepath.Join(cwd, "charts", dependency.Name)
 		subChart := filepath.Join(chart, "charts", dependency.Name)
 		// subDir := filepath.Join(outDir, alias)
@@ -545,43 +544,12 @@ func (h *HelmCLI) MultiTemplate(chart string, releaseName string, ns string, out
 		}
 	}
 	h.CWD = cwd
-	var rmSubTemplates func(string) error
-	rmSubTemplates = func(chart string) error {
-		stat, err := os.Stat(filepath.Join(chart, "charts"))
-		if err != nil && !os.IsNotExist(err) {
-			return err
-		} else if err != nil || !stat.IsDir() {
-			return nil
-		}
-		subcharts, err := ioutil.ReadDir(filepath.Join(chart, "charts"))
-		if err != nil {
-			return err
-		}
-		for _, entry := range subcharts {
-			if !entry.IsDir() {
-				continue
-			}
-			subchart := filepath.Join(chart, "charts", entry.Name())
-			stat, err := os.Stat(filepath.Join(subchart, "templates"))
-			if err != nil && !os.IsNotExist(err) {
-				return err
-			} else if err == nil && stat.IsDir() {
-				err = os.RemoveAll(filepath.Join(subchart, "templates"))
-				if err != nil {
-					return err
-				}
-			}
-			err = rmSubTemplates(subchart)
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	err = rmSubTemplates(chart)
+	// Clean the tempaltes of each subchart now that they have been generated already
+	err = RemoveSubTemplates(chart)
 	if err != nil {
 		return err
 	}
+	// lint and create templates for the main chart, without the subchart templates
 	_, err = h.Lint(valueFiles)
 	if err != nil {
 		return errors.Wrapf(err, "failed to lint chart")

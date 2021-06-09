@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/google/uuid"
-	"github.com/mholt/archiver"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 
@@ -28,8 +26,6 @@ import (
 	"github.com/jenkins-x/jx/v2/pkg/secreturl/fakevault"
 	"github.com/jenkins-x/jx/v2/pkg/util"
 	"github.com/jenkins-x/jx/v2/pkg/vault"
-
-	"k8s.io/helm/pkg/chartutil"
 )
 
 // StepHelmApplyOptions contains the command line flags
@@ -46,6 +42,7 @@ type StepHelmApplyOptions struct {
 	NoVault            bool
 	NoMasking          bool
 	ProviderValuesDir  string
+	MultiTemplates     bool
 }
 
 var (
@@ -100,6 +97,7 @@ func NewCmdStepHelmApply(commonOpts *opts.CommonOptions) *cobra.Command {
 	cmd.Flags().BoolVarP(&options.NoVault, "no-vault", "", false, "Disables loading secrets from Vault. e.g. if bootstrapping core services like Ingress before we have a Vault")
 	cmd.Flags().BoolVarP(&options.NoMasking, "no-masking", "", false, "The effective 'values.yaml' file is output to the console with parameters masked. Enabling this flag will show the unmasked secrets in the console output")
 	cmd.Flags().StringVarP(&options.ProviderValuesDir, "provider-values-dir", "", "", "The optional directory of kubernetes provider specific override values.tmpl.yaml files a kubernetes provider specific folder")
+	cmd.Flags().BoolVarP(&options.MultiTemplates, "multi-templates", "", false, "Calls helm template on each sub chart instead of globally, to avoid conflict among charts with different versions")
 
 	return cmd
 }
@@ -314,76 +312,39 @@ func (o *StepHelmApplyOptions) Run() error {
 			return errors.Wrapf(err, "failed to replace missing versions in the requirements.yaml in dir %s", dir)
 		}
 	}
-	err = o.HelmInitDependencyBuildNoLint(dir, o.DefaultReleaseCharts())
+	if o.MultiTemplates {
+		err = o.HelmInitDependencyBuildNoLint(dir, o.DefaultReleaseCharts())
+	} else {
+		err = o.HelmInitDependencyBuild(dir, o.DefaultReleaseCharts(), valueFiles)
+	}
 	if err != nil {
 		return err
 	}
 
-	// Now let's unpack all the dependencies and apply the vault URLs
-	dependencies, err := filepath.Glob(filepath.Join(dir, "charts", "*.tgz"))
+	// Unpack all dependencies
+	err = o.UnpackCharts(dir)
 	if err != nil {
-		return errors.Wrapf(err, "finding chart dependencies in %s", filepath.Join(dir, "charts"))
+		return err
 	}
-	for _, src := range dependencies {
-		tmp, err := ioutil.TempDir("", "jx-dependencies")
-		if err != nil {
-			return errors.Wrapf(err, "creating temp dir")
-		}
-		err = archiver.Unarchive(src, tmp)
-		if err != nil {
-			return errors.Wrapf(err, "untarring %s to %s", src, tmp)
-		}
-		dirs, err := ioutil.ReadDir(tmp)
-		if err != nil {
-			return errors.Wrapf(err, "listing %s", tmp)
-		}
-		if !(len(dirs) == 1 && dirs[0].IsDir() && strings.HasPrefix(filepath.Base(src), dirs[0].Name() + "-")) {
-			return errors.Wrapf(err, "unexpected chart format %s", src)
-		}
-		tmp = filepath.Join(tmp, dirs[0].Name())
-		dest := filepath.Join(dir, "charts", dirs[0].Name())
-		chart, err := chartutil.LoadChartfile(filepath.Join(tmp, "Chart.yaml"))
-		if err != nil {
-			return errors.Wrapf(err, "loading %s/Chart.yaml", tmp)
-		}
-		if chart.ApiVersion == "" {
-			chart.ApiVersion = "v1"
-			err = chartutil.SaveChartfile(filepath.Join(tmp, "Chart.yaml"), chart)
-			if err != nil {
-				return errors.Wrapf(err, "saving %s/Chart.yaml", tmp)
-			}
-		}
-		err = filepath.Walk(tmp, func(path string, info os.FileInfo, err error) error {
-			if filepath.Base(path) == helm.ValuesFileName {
 
-				newFiles, cleanup, err := helm.DecorateWithSecrets([]string{path}, secretURLClient)
-				defer cleanup() //nolint:errcheck
-				if err != nil {
-					return errors.Wrapf(err, "decorating %s with secrets", path)
-				}
-				err = os.Rename(newFiles[0], path)
-				if err != nil {
-					return errors.Wrapf(err, "moving decorated file %s to %s", newFiles[0], path)
-				}
+	// apply the vault URLs to the value files
+	err = filepath.Walk(filepath.Join(dir, "charts"), func(path string, info os.FileInfo, err error) error {
+		if filepath.Base(path) == helm.ValuesFileName {
+
+			newFiles, cleanup, err := helm.DecorateWithSecrets([]string{path}, secretURLClient)
+			defer cleanup() //nolint:errcheck
+			if err != nil {
+				return errors.Wrapf(err, "decorating %s with secrets", path)
 			}
-			return nil
-		})
-		if err != nil {
-			return errors.Wrapf(err, "walking %s", tmp)
+			err = os.Rename(newFiles[0], path)
+			if err != nil {
+				return errors.Wrapf(err, "moving decorated file %s to %s", newFiles[0], path)
+			}
 		}
-		err = os.Rename(tmp, dest)
-		if err != nil {
-			return errors.Wrapf(err, "moving %s to %s", tmp, dest)
-		}
-		err = os.Remove(filepath.Dir(tmp))
-		if err != nil {
-			return errors.Wrapf(err, "removing %s", filepath.Dir(tmp))
-		}
-		err = os.Remove(src)
-		if err != nil {
-			return errors.Wrapf(err, "removing %s", src)
-		}
-		// err = archiver.Archive(dirs, src)
+		return nil
+	})
+	if err != nil {
+		return errors.Wrapf(err, "walking %s/charts", dir)
 	}
 
 	err = o.applyAppsTemplateOverrides(chartName)
@@ -406,7 +367,7 @@ func (o *StepHelmApplyOptions) Run() error {
 		SetStrings:     setStrings,
 		ValueFiles:     valueFiles,
 		Dir:            dir,
-		MultiTemplates: true,
+		MultiTemplates: o.MultiTemplates,
 	}
 	if o.Boot {
 		helmOptions.VersionsGitURL = requirements.VersionStream.URL
@@ -509,22 +470,22 @@ func (o *StepHelmApplyOptions) applyTemplateOverrides(chartName string) error {
 					// If there is no charts/<depChartName> dir it means that it's not a dependency of this chart
 					continue
 				}
-				// If the chart directory does not exist explode the tgz
-				if exists, err := util.DirExists(depChartDir); err == nil && !exists {
-					chartArchives, _ := filepath.Glob(filepath.Join(depChartsDir, depChartName+"*.tgz"))
-					if len(chartArchives) == 1 {
-						log.Logger().Debugf("Exploding chart %s", chartArchives[0])
-						err = archiver.Unarchive(chartArchives[0], depChartsDir)
-						if err != nil {
-							return errors.Wrapf(err, "unable to unarchive %s to destination %s", chartArchives[0], depChartDir)
-						}
-						// Remove the unexploded chart
-						err = os.Remove(chartArchives[0])
-						if err != nil {
-							return errors.Wrapf(err, "unable to remove chart %s", chartArchives[0])
-						}
-					}
-				}
+				// // If the chart directory does not exist explode the tgz
+				// if exists, err := util.DirExists(depChartDir); err == nil && !exists {
+				// 	chartArchives, _ := filepath.Glob(filepath.Join(depChartsDir, depChartName+"*.tgz"))
+				// 	if len(chartArchives) == 1 {
+				// 		log.Logger().Debugf("Exploding chart %s", chartArchives[0])
+				// 		err = archiver.Unarchive(chartArchives[0], depChartsDir)
+				// 		if err != nil {
+				// 			return errors.Wrapf(err, "unable to unarchive %s to destination %s", chartArchives[0], depChartDir)
+				// 		}
+				// 		// Remove the unexploded chart
+				// 		err = os.Remove(chartArchives[0])
+				// 		if err != nil {
+				// 			return errors.Wrapf(err, "unable to remove chart %s", chartArchives[0])
+				// 		}
+				// 	}
+				// }
 				overrideDst := filepath.Join(depChartDir, "templates", templateName)
 				log.Logger().Debugf("Copying chart override %s", overrideSrc)
 				err = ioutil.WriteFile(overrideDst, data, util.DefaultWritePermissions)
@@ -549,29 +510,31 @@ func (o *StepHelmApplyOptions) applyAppsTemplateOverrides(chartName string) erro
 			depChartName := writeTemplateParts[len(writeTemplateParts)-3]
 			templateName := writeTemplateParts[len(writeTemplateParts)-1]
 			depChartDir := filepath.Join(depChartsDir, depChartName)
-			chartArchives, _ := filepath.Glob(filepath.Join(depChartsDir, depChartName+"*.tgz"))
-			if len(chartArchives) == 1 {
-				uuid, _ := uuid.NewUUID()
-				log.Logger().Debugf("Exploding App chart %s", chartArchives[0])
-				explodedChartTempDir := filepath.Join(os.TempDir(), uuid.String())
-				if err = archiver.Unarchive(chartArchives[0], explodedChartTempDir); err != nil {
-					return defineAppsChartOverridingError(chartName, err)
-				}
-				overrideDst := filepath.Join(explodedChartTempDir, depChartName, "templates", templateName)
+			// chartArchives, _ := filepath.Glob(filepath.Join(depChartsDir, depChartName+"*.tgz"))
+			// if len(chartArchives) == 1 {
+			// 	uuid, _ := uuid.NewUUID()
+			// 	log.Logger().Debugf("Exploding App chart %s", chartArchives[0])
+			// 	explodedChartTempDir := filepath.Join(os.TempDir(), uuid.String())
+			// 	if err = archiver.Unarchive(chartArchives[0], explodedChartTempDir); err != nil {
+			// 		return defineAppsChartOverridingError(chartName, err)
+			// 	}
+			// 	overrideDst := filepath.Join(explodedChartTempDir, depChartName, "templates", templateName)
+			if exists, err := util.DirExists(depChartDir); exists {
+				overrideDst := filepath.Join(depChartDir, "templates", templateName)
 				log.Logger().Debugf("Copying chart override %s", overrideSrc)
 				err = ioutil.WriteFile(overrideDst, data, util.DefaultWritePermissions)
 				if err != nil {
 					log.Logger().Warnf("Error copying template %s to %s %v", overrideSrc, overrideDst, err)
 				}
-				if err = os.Remove(chartArchives[0]); err != nil {
-					return defineAppsChartOverridingError(chartName, err)
-				}
-				if err = archiver.Archive([]string{filepath.Join(explodedChartTempDir, depChartName)}, chartArchives[0]); err != nil {
-					return defineAppsChartOverridingError(chartName, err)
-				}
-				if err = os.RemoveAll(explodedChartTempDir); err != nil {
-					log.Logger().Warnf("There was a problem deleting the temp folder %s", depChartDir)
-				}
+				// if err = os.Remove(chartArchives[0]); err != nil {
+				// 	return defineAppsChartOverridingError(chartName, err)
+				// }
+				// if err = archiver.Archive([]string{filepath.Join(explodedChartTempDir, depChartName)}, chartArchives[0]); err != nil {
+				// 	return defineAppsChartOverridingError(chartName, err)
+				// }
+				// if err = os.RemoveAll(explodedChartTempDir); err != nil {
+				// 	log.Logger().Warnf("There was a problem deleting the temp folder %s", depChartDir)
+				// }
 			}
 		}
 	}

@@ -9,11 +9,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/mholt/archiver"
+	"k8s.io/helm/pkg/chartutil"
+
 	"github.com/jenkins-x/jx/v2/pkg/config"
 	"github.com/jenkins-x/jx/v2/pkg/io/secrets"
 	"github.com/jenkins-x/jx/v2/pkg/versionstream"
 
-	"github.com/google/uuid"
 	"github.com/jenkins-x/jx/v2/pkg/secreturl"
 	"github.com/jenkins-x/jx/v2/pkg/secreturl/localvault"
 
@@ -657,11 +660,7 @@ func (o *CommonOptions) HelmInitDependencyBuild(dir string, chartRepos []string,
 		return errors.Wrapf(err, "failed to build the dependencies of chart '%s'", dir)
 	}
 
-	_, err = o.Helm().Lint(valuesFiles)
-	if err != nil {
-		return errors.Wrapf(err, "failed to lint the chart '%s'", dir)
-	}
-	return nil
+	return o.HelmLint(dir, valuesFiles)
 }
 
 // HelmInitDependencyBuild initialises the dependencies and runs the build
@@ -684,6 +683,16 @@ func (o *CommonOptions) HelmInitDependencyBuildNoLint(dir string, chartRepos []s
 
 // HelmInitRecursiveDependencyBuild helm initialises the dependencies recursively
 func (o *CommonOptions) HelmInitRecursiveDependencyBuild(dir string, chartRepos []string, valuesFiles []string) error {
+	return o.auxHelmInitRecursiveDependencyBuild(dir, chartRepos, valuesFiles, true)
+}
+
+// HelmInitRecursiveDependencyBuild helm initialises the dependencies recursively
+func (o *CommonOptions) HelmInitRecursiveDependencyBuildNoLint(dir string, chartRepos []string) error {
+	return o.auxHelmInitRecursiveDependencyBuild(dir, chartRepos, nil, false)
+}
+
+// HelmInitRecursiveDependencyBuild helm initialises the dependencies recursively
+func (o *CommonOptions) auxHelmInitRecursiveDependencyBuild(dir string, chartRepos []string, valuesFiles []string, lint bool) error {
 	err := o.HelmInitDependency(dir, chartRepos)
 	if err != nil {
 		return errors.Wrap(err, "initializing Helm")
@@ -763,11 +772,9 @@ func (o *CommonOptions) HelmInitRecursiveDependencyBuild(dir string, chartRepos 
 		}
 	}
 
-	_, err = o.Helm().Lint(valuesFiles)
-	if err != nil {
-		return errors.Wrapf(err, "linting the chart '%s'", dir)
+	if lint {
+		return o.HelmLint(dir, valuesFiles)
 	}
-
 	return nil
 }
 
@@ -867,5 +874,77 @@ func (o *CommonOptions) ModifyHelmValuesFile(dir string, fn func(string) (string
 	}
 
 	log.Logger().Infof("modified the helm file: %s", util.ColorInfo(valuesFileName))
+	return nil
+}
+
+func (o *CommonOptions) HelmLint(dir string, valuesFiles []string) error {
+	o.Helm().SetCWD(dir)
+	_, err := o.Helm().Lint(valuesFiles)
+	if err != nil {
+		return errors.Wrapf(err, "failed to lint the chart '%s'", dir)
+	}
+	return nil
+}
+
+func (o *CommonOptions) UnpackCharts(dir string) error {
+	// Unpack all dependencies
+	dependencies, err := filepath.Glob(filepath.Join(dir, "charts", "*.tgz"))
+	if err != nil {
+		return errors.Wrapf(err, "finding chart dependencies in %s", filepath.Join(dir, "charts"))
+	}
+	tmp := filepath.Join(dir, "tmpcharts")
+	err = os.Mkdir(tmp, 0755)
+	if err != nil {
+		return errors.Wrapf(err, "creating temp dir %s", tmp)
+	}
+	defer os.RemoveAll(tmp)
+	for _, src := range dependencies {
+		subTmp := filepath.Base(src)
+		subTmp = subTmp[0:len(subTmp)-len(filepath.Ext(subTmp))]
+		subTmp = filepath.Join(tmp, subTmp)
+		err := os.Mkdir(subTmp, 0755)
+		if err != nil {
+			return errors.Wrapf(err, "creating temp dir %s", subTmp)
+		}
+		err = archiver.Unarchive(src, subTmp)
+		if err != nil {
+			return errors.Wrapf(err, "untarring %s to %s", src, subTmp)
+		}
+		// Check that it only contains one folder, as expected in a Chart
+		dirs, err := ioutil.ReadDir(subTmp)
+		if err != nil {
+			return errors.Wrapf(err, "listing %s", subTmp)
+		}
+		if !(len(dirs) == 1 && dirs[0].IsDir() && strings.HasPrefix(filepath.Base(src), dirs[0].Name() + "-")) {
+			return errors.Wrapf(err, "unexpected chart format %s", src)
+		}
+		subTmp = filepath.Join(subTmp, dirs[0].Name())
+		dest := filepath.Join(dir, "charts", dirs[0].Name())
+		// Add apiVersion field in the chart if missing (really old charts)
+		chart, err := chartutil.LoadChartfile(filepath.Join(subTmp, "Chart.yaml"))
+		if err != nil {
+			return errors.Wrapf(err, "loading %s/Chart.yaml", subTmp)
+		}
+		if chart.ApiVersion == "" {
+			chart.ApiVersion = "v1"
+			err = chartutil.SaveChartfile(filepath.Join(subTmp, "Chart.yaml"), chart)
+			if err != nil {
+				return errors.Wrapf(err, "saving %s/Chart.yaml", subTmp)
+			}
+		}
+		if err != nil {
+			return errors.Wrapf(err, "walking %s", subTmp)
+		}
+		// move the unpacked folder back in charts directory
+		// and remove the original archive
+		err = os.Rename(subTmp, dest)
+		if err != nil {
+			return errors.Wrapf(err, "moving %s to %s", subTmp, dest)
+		}
+		err = os.Remove(src)
+		if err != nil {
+			return errors.Wrapf(err, "removing %s", src)
+		}
+	}
 	return nil
 }
