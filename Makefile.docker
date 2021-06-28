@@ -105,6 +105,8 @@ docker-all: linux build/helm
 	docker push $(DOCKER_HUB_USER)/builder-php5x:$(DOCKER_TAG)
 	docker build -t $(DOCKER_HUB_USER)/builder-php7x:$(DOCKER_TAG) -f Dockerfile.builder-php7x .
 	docker push $(DOCKER_HUB_USER)/builder-php7x:$(DOCKER_TAG)
+	docker build -t $(DOCKER_HUB_USER)/builder-maven:$(DOCKER_TAG) -f Dockerfile.builder-maven .
+	docker push $(DOCKER_HUB_USER)/builder-maven
 
 docker-python37: linux build/helm
 	docker build -t $(DOCKER_HUB_USER)/builder-python37:$(DOCKER_TAG) -f Dockerfile.builder-python37 .
