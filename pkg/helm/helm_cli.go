@@ -454,9 +454,10 @@ func (h *HelmCLI) FetchChart(chart string, version string, untar bool, untardir 
 // Template generates the YAML from the chart template to the given directory
 func (h *HelmCLI) Template(chart string, releaseName string, ns string, outDir string, upgrade bool,
 	values []string, valueStrings []string, valueFiles []string) error {
+	log.Logger().Debugf("template chart: %s to %s", chart, outDir)
 	args := []string{"template", "--namespace", ns}
 	if h.BinVersion == V3 {
-		args = append(args, "--release-name", releaseName)
+		args = append(args, "--name-template", releaseName)
 	} else {
 		args = append(args, "--name", releaseName)
 	}
@@ -519,6 +520,7 @@ func (h *HelmCLI) MultiTemplate(chart string, releaseName string, ns string, out
 	}
 	// lint and create templates for each subchart
 	for _, dependency := range requirements.Dependencies {
+		log.Logger().Debugf("dependency: %v", dependency)
 		alias := dependency.Alias
 		if alias == "" {
 			alias = dependency.Name
@@ -528,16 +530,16 @@ func (h *HelmCLI) MultiTemplate(chart string, releaseName string, ns string, out
 		localValuesFiles := GetSplitted(splitValueFiles, alias)
 		h.CWD = filepath.Join(cwd, "charts", dependency.Name)
 		subChart := filepath.Join(chart, "charts", dependency.Name)
-		// subDir := filepath.Join(outDir, alias)
-		// err := os.Mkdir(subDir, 0700)
-		// if err != nil {
-		// 	return err
-		// }
+		subDir := filepath.Join(outDir, alias)
+		err := os.Mkdir(subDir, 0700)
+		if err != nil {
+			return err
+		}
 		_, err = h.Lint(localValuesFiles)
 		if err != nil {
 			return errors.Wrapf(err, "failed to lint subchart %s", alias)
 		}
-		err = h.Template(subChart, releaseName, ns, outDir, upgrade,
+		err = h.Template(subChart, releaseName, ns, subDir, upgrade,
 			localValues, localValuesStrings, localValuesFiles)
 		if err != nil {
 			return err

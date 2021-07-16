@@ -867,6 +867,7 @@ func getHelmHookFromFile(basedir string, path string, hooksDir string, helmHook 
 
 	name := getYamlValueString(m, "metadata", "name")
 	helmDeletePolicy := getYamlValueString(m, "metadata", "annotations", "helm.sh/hook-delete-policy")
+	log.Logger().Debugf("processed hook %s (%s | %s) to file: %s", kind, helmHook, helmDeletePolicy, hookFile)
 	return NewHelmHook(kind, name, hookFile, helmHook, helmDeletePolicy), nil
 }
 
@@ -917,6 +918,7 @@ func processChartResource(partFile string, data []byte, kind string, ns string, 
 	if err != nil {
 		return errors.Wrapf(err, "Failed to write YAML partFile %s", partFile)
 	}
+	log.Logger().Debugf("processed resource %s in part file: %s", kind, partFile)
 	return nil
 }
 
@@ -1082,8 +1084,10 @@ func (h *HelmTemplate) getChart(chartDir string, version string) (*chart.Metadat
 }
 
 func (h *HelmTemplate) runHooks(hooks []*HelmHook, hookPhase string, ns string, chart string, releaseName string, wait bool, create bool, force bool) error {
+	log.Logger().Debugf("running hook phase %s in namespace %s", hookPhase, ns)
 	matchingHooks := MatchingHooks(hooks, hookPhase, "")
 	for _, hook := range matchingHooks {
+		log.Logger().Debugf("applying hook %s %s from file: %s", hook.Kind, hook.Name, hook.File)
 		if util.StringArrayIndex(hook.HookDeletePolicies, beforeHookCreation) >= 0 {
 			h.kubectlDeleteFile(ns, hook.File)
 		}
@@ -1096,6 +1100,7 @@ func (h *HelmTemplate) runHooks(hooks []*HelmHook, hookPhase string, ns string, 
 }
 
 func (h *HelmTemplate) deleteHooks(hooks []*HelmHook, hookPhase string, hookDeletePolicy string, ns string) error {
+	log.Logger().Debugf("deleting hook phase %s (%s) in namespace %s", hookPhase, hookDeletePolicy, ns)
 	flag := os.Getenv("JX_DISABLE_DELETE_HELM_HOOKS")
 	matchingHooks := MatchingHooks(hooks, hookPhase, hookDeletePolicy)
 	for _, hook := range matchingHooks {
@@ -1114,6 +1119,7 @@ func (h *HelmTemplate) deleteHooks(hooks []*HelmHook, hookPhase string, hookDele
 			log.Logger().Infof("Not deleting the Job %s as we have the $JX_DISABLE_DELETE_HELM_HOOKS enabled", name)
 			continue
 		}
+		log.Logger().Debugf("deleting hook %s %s from file: %s", hook.Kind, hook.Name, hook.File)
 		err := h.kubectlDeleteFile(ns, hook.File)
 		if err != nil {
 			return err
